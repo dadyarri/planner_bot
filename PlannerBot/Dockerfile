@@ -1,5 +1,5 @@
 ﻿FROM mcr.microsoft.com/dotnet/runtime:10.0 AS base
-USER $APP_UID
+USER root
 WORKDIR /app
 RUN apt install libkrb5-3
 
@@ -17,6 +17,7 @@ ARG BUILD_CONFIGURATION=Release
 RUN dotnet publish "./PlannerBot.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
 
 FROM base AS final
+USER $APP_UID
 WORKDIR /app
 COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "PlannerBot.dll"]

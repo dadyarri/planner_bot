@@ -1,7 +1,7 @@
 ﻿FROM mcr.microsoft.com/dotnet/runtime:10.0 AS base
 USER root
 WORKDIR /app
-RUN apt install libgssapi-krb5-2
+RUN apt update && apt install libgssapi-krb5-2
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release

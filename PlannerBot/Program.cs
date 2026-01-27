@@ -2,6 +2,7 @@
 using System.Globalization;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using PlannerBot;
 using PlannerBot.Data;
 using Telegram.Bot;
 using Telegram.Bot.Types;
@@ -25,6 +26,7 @@ var bot = new TelegramBotClient(token, cancellationToken: cts.Token);
 var me = await bot.GetMe();
 
 bot.OnMessage += OnMessage;
+bot.OnUpdate += OnUpdate;
 while (true) ;
 
 async Task OnMessage(Message message, UpdateType update)
@@ -51,6 +53,78 @@ async Task OnMessage(Message message, UpdateType update)
     }
 }
 
+async Task OnUpdate(Update update)
+{
+    if (update.Type == UpdateType.CallbackQuery)
+    {
+        var split = update.CallbackQuery!.Data!.Split(";");
+        if (split.Length == 3)
+        {
+            var availability = int.Parse(split[0]);
+            var data = new PlanButtonCallback
+            {
+                Availability = (Availability)availability,
+                Date = DateTime.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture),
+                Username = split[2],
+            };
+            var newAvailability = (Availability)((int)(data.Availability + 1) % 4);
+
+            if (data.Username != update.CallbackQuery.From.Username)
+            {
+                await bot.AnswerCallbackQuery(update.CallbackQuery!.Id, "Не твоя кнопка!");
+                return;
+            }
+
+            await using var db = new AppDbContext(databaseOptions.Options);
+
+            var user = await db.Users
+                .Where(u => u.Username == data.Username)
+                .FirstOrDefaultAsync();
+
+            if (user is null)
+            {
+                user = new User
+                {
+                    Name = $"{update.CallbackQuery.From.FirstName} {update.CallbackQuery.From.LastName}".Trim(),
+                    Username = update.CallbackQuery.From.Username,
+                    IsActive = true
+                };
+                await db.Users.AddAsync(user);
+            }
+
+            var date = DateOnly.FromDateTime(data.Date);
+            var response = await db.Responses.Where(r =>
+                    r.User.Username == data.Username && r.Date == date)
+                .FirstOrDefaultAsync();
+
+            if (response is null)
+            {
+                response = new Response
+                {
+                    User = user,
+                    Availability = newAvailability,
+                    Date = date,
+                };
+                await db.Responses.AddAsync(response);
+            }
+
+            response.Availability = newAvailability;
+
+            await db.SaveChangesAsync();
+
+            await bot.EditMessageReplyMarkup(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id,
+                await GeneratePlanKeyboard(update.CallbackQuery.Message, data.Username));
+        }
+        else if (update.CallbackQuery!.Data! == "delete")
+        {
+            await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id);
+            await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id - 1);
+        }
+
+        await bot.AnswerCallbackQuery(update.CallbackQuery!.Id);
+    }
+}
+
 async Task OnTextMessage(Message msg)
 {
     Console.WriteLine($"Received text '{msg.Text}' in {msg.Chat}");
@@ -69,10 +143,10 @@ async Task OnCommand(string command, string args, Message msg)
                     /no - Указать, что не могу играть сегодня
                     /prob - Указать, что возможно могу сегодня
                     /plan - Запланировать на две недели
-                    
+
                     /pause - Приостановить участие в играх
                     /unpause - Восстановить участие в играх
-                    
+
                     /get - Показать общий план и ближайшее пересечение
                     /set dd.mm.yyyy hh:mm - Установить время ближайшей игры
                     """, parseMode: ParseMode.Html, linkPreviewOptions: true,
@@ -105,7 +179,7 @@ async Task OnCommand(string command, string args, Message msg)
                     };
                     await db.Users.AddAsync(user);
                 }
-                
+
                 response = new Response
                 {
                     Availability = Availability.Yes,
@@ -192,7 +266,7 @@ async Task OnCommand(string command, string args, Message msg)
                     };
                     await db.Users.AddAsync(user);
                 }
-                
+
                 response = new Response
                 {
                     Availability = Availability.Probably,
@@ -210,7 +284,7 @@ async Task OnCommand(string command, string args, Message msg)
         case "/get":
         {
             await using var db = new AppDbContext(databaseOptions.Options);
-            
+
             var users = await db.Users
                 .Where(u => u.IsActive)
                 .ToListAsync();
@@ -268,7 +342,7 @@ async Task OnCommand(string command, string args, Message msg)
         case "/pause":
         {
             await using var db = new AppDbContext(databaseOptions.Options);
-            
+
             var user = await db.Users.Where(u => u.Username == msg.From!.Username)
                 .FirstOrDefaultAsync();
 
@@ -282,17 +356,17 @@ async Task OnCommand(string command, string args, Message msg)
                 };
                 await db.Users.AddAsync(user);
             }
-            
+
             user.IsActive = false;
             await db.SaveChangesAsync();
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["😢"]);
-            
+
             break;
         }
         case "/unpause":
         {
             await using var db = new AppDbContext(databaseOptions.Options);
-            
+
             var user = await db.Users.Where(u => u.Username == msg.From!.Username)
                 .FirstOrDefaultAsync();
 
@@ -306,12 +380,79 @@ async Task OnCommand(string command, string args, Message msg)
                 };
                 await db.Users.AddAsync(user);
             }
-            
+
             user.IsActive = true;
             await db.SaveChangesAsync();
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["🎉"]);
 
             break;
         }
+        case "/plan":
+        {
+            await using var db = new AppDbContext(databaseOptions.Options);
+
+            var calendar = await GeneratePlanKeyboard(msg);
+
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "Здесь можно настроить свободные дни в ближайшее время:", parseMode: ParseMode.Html,
+                linkPreviewOptions: true,
+                replyMarkup: calendar);
+
+            break;
+        }
     }
+}
+
+async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(Message message,
+    string? username = null)
+{
+    await using var db = new AppDbContext(databaseOptions.Options);
+
+    var today = DateTime.Today;
+
+    const int weeks = 2;
+    const int daysInWeek = 4;
+
+    var inlineKeyboardButtons = new InlineKeyboardButton[weeks + 1][];
+
+    for (var w = 0; w < weeks; w++)
+    {
+        inlineKeyboardButtons[w] = new InlineKeyboardButton[daysInWeek];
+        for (var d = 0; d < daysInWeek; d++)
+        {
+            var offset = w * daysInWeek + d;
+            var date = today.AddDays(offset);
+
+            var availability = await db.Responses
+                .Include(r => r.User)
+                .Where(r => r.User.Username == (username ?? message.From!.Username) &&
+                            r.Date == DateOnly.FromDateTime(date))
+                .Select(r => r.Availability)
+                .FirstOrDefaultAsync();
+
+            var emoji = availability switch
+            {
+                Availability.Yes => "✅ ",
+                Availability.No => "❌ ",
+                Availability.Probably => "❓ ",
+                _ => string.Empty
+            };
+
+            var format = date.ToString("dd.MM (ddd)", new CultureInfo("ru-RU"));
+            inlineKeyboardButtons[w][d] = InlineKeyboardButton.WithCallbackData(
+                $"{emoji}{format}",
+                $"{(int)(availability ?? Availability.Unknown)};{date:dd/MM/yyyy};{username ?? message.From!.Username}"
+            );
+        }
+    }
+
+    inlineKeyboardButtons[2] =
+    [
+        InlineKeyboardButton.WithCallbackData(
+            "Закончить",
+            "delete"
+        )
+    ];
+
+    return inlineKeyboardButtons;
 }

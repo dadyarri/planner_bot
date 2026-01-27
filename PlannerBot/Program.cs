@@ -400,6 +400,41 @@ async Task OnCommand(string command, string args, Message msg)
 
             break;
         }
+        case "/set":
+        {
+            if (args == string.Empty)
+            {
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: """
+                          Пропущены аргументы с датой/временем.
+
+                          Пример использования:
+                          /set 28.01.2026 18:30
+                          """, parseMode: ParseMode.Html,
+                    linkPreviewOptions: true);
+            }
+
+            if (!DateTime.TryParseExact(args, "dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var date))
+            {
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: """
+                          Невалидный формат даты/времени.
+
+                          Пример использования:
+                          /set 28.01.2026 18:30
+                          """, parseMode: ParseMode.Html,
+                    linkPreviewOptions: true);
+                return;
+            }
+            
+            await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: $"Отлично! Игра запланирована на {date.ToString("dd.MM.yyyy (ddd) HH:mm", new CultureInfo("ru-RU"))}", parseMode: ParseMode.Html,
+                linkPreviewOptions: true);
+            
+            break;
+        }
     }
 }
 

@@ -47,10 +47,6 @@ async Task OnMessage(Message message, UpdateType update)
                 return; // command was not targeted at me
         await OnCommand(command, text[space..].TrimStart(), message);
     }
-    else
-    {
-        await OnTextMessage(message);
-    }
 }
 
 async Task OnUpdate(Update update)
@@ -123,12 +119,6 @@ async Task OnUpdate(Update update)
 
         await bot.AnswerCallbackQuery(update.CallbackQuery!.Id);
     }
-}
-
-async Task OnTextMessage(Message msg)
-{
-    Console.WriteLine($"Received text '{msg.Text}' in {msg.Chat}");
-    await OnCommand("/start", "", msg);
 }
 
 async Task OnCommand(string command, string args, Message msg)

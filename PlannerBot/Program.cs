@@ -54,67 +54,110 @@ async Task OnUpdate(Update update)
     if (update.Type == UpdateType.CallbackQuery)
     {
         var split = update.CallbackQuery!.Data!.Split(";");
-        if (split.Length == 3)
+        switch (split[0])
         {
-            var availability = int.Parse(split[0]);
-            var data = new PlanButtonCallback
+            case "plan":
             {
-                Availability = (Availability)availability,
-                Date = DateTime.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture),
-                Username = split[2],
-            };
-            var newAvailability = (Availability)((int)(data.Availability + 1) % 4);
-
-            if (data.Username != update.CallbackQuery.From.Username)
-            {
-                await bot.AnswerCallbackQuery(update.CallbackQuery!.Id, "Не твоя кнопка!");
-                return;
-            }
-
-            await using var db = new AppDbContext(databaseOptions.Options);
-
-            var user = await db.Users
-                .Where(u => u.Username == data.Username)
-                .FirstOrDefaultAsync();
-
-            if (user is null)
-            {
-                user = new User
+                var availability = int.Parse(split[1]);
+                var data = new PlanButtonCallback
                 {
-                    Name = $"{update.CallbackQuery.From.FirstName} {update.CallbackQuery.From.LastName}".Trim(),
-                    Username = update.CallbackQuery.From.Username,
-                    IsActive = true
+                    Availability = (Availability)availability,
+                    Date = DateTime.ParseExact(split[2], "dd/MM/yyyy", CultureInfo.InvariantCulture),
+                    Username = split[3],
                 };
-                await db.Users.AddAsync(user);
-            }
+                var newAvailability = (Availability)((int)(data.Availability + 1) % 4);
 
-            var date = DateOnly.FromDateTime(data.Date);
-            var response = await db.Responses.Where(r =>
-                    r.User.Username == data.Username && r.Date == date)
-                .FirstOrDefaultAsync();
-
-            if (response is null)
-            {
-                response = new Response
+                if (data.Username != update.CallbackQuery.From.Username)
                 {
-                    User = user,
-                    Availability = newAvailability,
+                    await bot.AnswerCallbackQuery(update.CallbackQuery!.Id, "Не твоя кнопка!");
+                    return;
+                }
+
+                await using var db = new AppDbContext(databaseOptions.Options);
+
+                var user = await db.Users
+                    .Where(u => u.Username == data.Username)
+                    .FirstOrDefaultAsync();
+
+                if (user is null)
+                {
+                    user = new User
+                    {
+                        Name = $"{update.CallbackQuery.From.FirstName} {update.CallbackQuery.From.LastName}".Trim(),
+                        Username = update.CallbackQuery.From.Username,
+                        IsActive = true
+                    };
+                    await db.Users.AddAsync(user);
+                }
+
+                var date = DateOnly.FromDateTime(data.Date);
+                var response = await db.Responses.Where(r =>
+                        r.User.Username == data.Username && r.Date == date)
+                    .FirstOrDefaultAsync();
+
+                if (response is null)
+                {
+                    response = new Response
+                    {
+                        User = user,
+                        Availability = newAvailability,
+                        Date = date,
+                    };
+                    await db.Responses.AddAsync(response);
+                }
+
+                response.Availability = newAvailability;
+
+                await db.SaveChangesAsync();
+
+                await bot.EditMessageReplyMarkup(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id,
+                    await GeneratePlanKeyboard(update.CallbackQuery.Message, data.Username));
+                break;
+            }
+            case "save":
+            {
+                var now = DateTime.Now;
+                var date = DateOnly.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
+                var time = TimeOnly.ParseExact(split[2], "HH:mm", CultureInfo.InvariantCulture);
+
+                await using var db = new AppDbContext(databaseOptions.Options);
+                await db.SavedGame.Where(sg => sg.Date <= DateOnly.FromDateTime(now)).ExecuteDeleteAsync();
+
+                await db.AddAsync(new SavedGame
+                {
                     Date = date,
-                };
-                await db.Responses.AddAsync(response);
+                    Time = time
+                });
+
+                await db.SaveChangesAsync();
+
+                var sb = new StringBuilder();
+
+                foreach (var game in db.SavedGame)
+                {
+                    var dateStr = game.Date.ToString("dd.MM.yyyy (ddd)", new CultureInfo("ru-RU"));
+                    var timeStr = game.Time.ToString("HH:mm", new CultureInfo("ru-RU"));
+                    sb.AppendLine($"- {dateStr} {timeStr}");
+                }
+
+                await bot.SendMessage(update.CallbackQuery.Message!.Chat.Id,
+                    messageThreadId: update.CallbackQuery.Message!.MessageThreadId,
+                    text: $"""
+                          Игра сохранена! Запланированные игры:
+                          
+                          {sb}
+                          """,
+                    parseMode: ParseMode.Html, linkPreviewOptions: true,
+                    replyMarkup: new ReplyKeyboardRemove());
+
+                break;
             }
-
-            response.Availability = newAvailability;
-
-            await db.SaveChangesAsync();
-
-            await bot.EditMessageReplyMarkup(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id,
-                await GeneratePlanKeyboard(update.CallbackQuery.Message, data.Username));
-        }
-        else if (update.CallbackQuery!.Data! == "delete")
-        {
-            await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id);
-            await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id - 1);
+            case "delete":
+            {
+                await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id);
+                await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id - 1);
+                break;
+            }
         }
 
         await bot.AnswerCallbackQuery(update.CallbackQuery!.Id);
@@ -383,7 +426,7 @@ async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(Message message,
             var format = date.ToString("dd.MM (ddd)", new CultureInfo("ru-RU"));
             inlineKeyboardButtons[w][d] = InlineKeyboardButton.WithCallbackData(
                 $"{emoji}{format}",
-                $"{(int)(availability ?? Availability.Unknown)};{date:dd/MM/yyyy};{username ?? message.From!.Username}"
+                $"plan;{(int)(availability ?? Availability.Unknown)};{date:dd/MM/yyyy};{username ?? message.From!.Username}"
             );
         }
     }
@@ -447,7 +490,7 @@ async Task<TimeOnly?> UpdateResponseForDate(Message message, Availability availa
     }
 
     await db.SaveChangesAsync();
-    
+
     var suitableTime = await CheckIfDateIsAvailable(date);
     return suitableTime;
 }

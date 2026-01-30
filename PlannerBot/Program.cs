@@ -99,7 +99,7 @@ async Task OnUpdate(Update update)
                 var date = DateOnly.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
                 var time = TimeOnly.ParseExact(split[2], "HH:mm", CultureInfo.InvariantCulture);
                 var username = split[3];
-                
+
                 if (username != update.CallbackQuery.From.Username)
                 {
                     await bot.AnswerCallbackQuery(update.CallbackQuery!.Id, "Не твоя кнопка!");
@@ -142,6 +142,26 @@ async Task OnUpdate(Update update)
             {
                 await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id);
                 await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id - 1);
+
+                for (var i = 0; i < 8; i++)
+                {
+                    var date = DateTime.UtcNow.AddDays(i);
+                    var suitableTime = await CheckIfDateIsAvailable(DateOnly.FromDateTime(date));
+
+                    if (suitableTime is not null)
+                    {
+                        await bot.SendMessage(update.CallbackQuery.Message!.Chat.Id,
+                            messageThreadId: update.CallbackQuery.Message.MessageThreadId,
+                            text: $"Ура! {date:dd.MM.yyyy} все могут! Удобное время: <b>{suitableTime:HH:mm}</b>",
+                            parseMode: ParseMode.Html, linkPreviewOptions: true,
+                            replyMarkup: new InlineKeyboardMarkup(
+                                InlineKeyboardButton.WithCallbackData("Сохранить",
+                                    $"save;{date:dd/MM/yyyy};{suitableTime:HH:mm}")
+                            )
+                        );
+                    }
+                }
+
                 break;
             }
         }
@@ -565,7 +585,7 @@ async Task<TimeOnly?> CheckIfDateIsAvailable(DateOnly date)
 
 async Task SavePlannedGame(DateOnly date, TimeOnly time, Message message)
 {
-    var now = DateTime.Now;
+    var now = DateTime.UtcNow;
 
     await using var db = new AppDbContext(databaseOptions.Options);
     await db.SavedGame.Where(sg => sg.Date <= DateOnly.FromDateTime(now)).ExecuteDeleteAsync();

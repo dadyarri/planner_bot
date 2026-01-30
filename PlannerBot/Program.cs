@@ -270,8 +270,10 @@ async Task OnCommand(string command, string args, Message msg)
                 .Select(g => g.Key)
                 .FirstOrDefaultAsync();
 
+            var availableTime = await CheckIfDateIsAvailable(nearestFittingDate);
+
             var format = nearestFittingDate != default
-                ? nearestFittingDate.ToString("dd MMM (ddd)", new CultureInfo("ru-RU"))
+                ? $"{nearestFittingDate.ToString("dd MMM (ddd)", new CultureInfo("ru-RU"))}{availableTime?.ToString(" HH:mm") ?? string.Empty}"
                 : "не найдено";
 
             sb.Append($"<b>Ближайшая удобная дата</b>: {format}");

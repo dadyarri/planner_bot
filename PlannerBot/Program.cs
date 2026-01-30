@@ -129,7 +129,7 @@ async Task OnCommand(string command, string args, Message msg)
         case "/start":
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId, text: """
                     <b><u>Меню бота</u></b>:
-                    /yes - Указать, что могу играть сегодня
+                    /yes hh:mm - Указать, что могу играть сегодня (с указанием времени)
                     /no - Указать, что не могу играть сегодня
                     /prob - Указать, что возможно могу сегодня
                     /plan - Запланировать на две недели
@@ -144,129 +144,29 @@ async Task OnCommand(string command, string args, Message msg)
             break;
         case "/yes":
         {
-            await using var db = new AppDbContext(databaseOptions.Options);
-
-            var response = await db.Responses.Where(r =>
-                    r.User.Username == msg.From!.Username && r.Date == DateOnly.FromDateTime(DateTime.UtcNow))
-                .FirstOrDefaultAsync();
-
-            if (response is not null)
+            if (string.IsNullOrEmpty(args))
             {
-                response.Availability = Availability.Yes;
-            }
-            else
-            {
-                var user = await db.Users.Where(u => u.Username == msg.From!.Username)
-                    .FirstOrDefaultAsync();
-
-                if (user is null)
-                {
-                    user = new User
-                    {
-                        Username = msg.From!.Username ?? throw new UnreachableException(),
-                        Name = $"{msg.From!.FirstName} {msg.From!.LastName}".Trim(),
-                        IsActive = true
-                    };
-                    await db.Users.AddAsync(user);
-                }
-
-                response = new Response
-                {
-                    Availability = Availability.Yes,
-                    Date = DateOnly.FromDateTime(DateTime.UtcNow),
-                    User = user
-                };
-                await db.Responses.AddAsync(response);
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: "Укажите время, начиная с которого свободны",
+                    parseMode: ParseMode.Html, linkPreviewOptions: true,
+                    replyMarkup: new ReplyKeyboardRemove());
             }
 
-            await db.SaveChangesAsync();
+            await UpdateResponseForToday(msg, Availability.Yes, args);
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["❤"]);
 
             break;
         }
         case "/no":
         {
-            await using var db = new AppDbContext(databaseOptions.Options);
-
-            var response = await db.Responses
-                .Include(u => u.User)
-                .Where(r =>
-                    r.User.Username == msg.From!.Username && r.Date == DateOnly.FromDateTime(DateTime.UtcNow))
-                .FirstOrDefaultAsync();
-
-            if (response is not null)
-            {
-                response.Availability = Availability.No;
-            }
-            else
-            {
-                var user = await db.Users
-                    .Where(u => u.Username == msg.From!.Username)
-                    .FirstOrDefaultAsync();
-
-                if (user is null)
-                {
-                    user = new User
-                    {
-                        Username = msg.From!.Username ?? throw new UnreachableException(),
-                        Name = $"{msg.From!.FirstName} {msg.From!.LastName}".Trim(),
-                        IsActive = true
-                    };
-                    await db.Users.AddAsync(user);
-                }
-
-                response = new Response
-                {
-                    Availability = Availability.No,
-                    Date = DateOnly.FromDateTime(DateTime.UtcNow),
-                    User = user
-                };
-                await db.Responses.AddAsync(response);
-            }
-
-            await db.SaveChangesAsync();
+            await UpdateResponseForToday(msg, Availability.No);
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["💩"]);
 
             break;
         }
         case "/prob":
         {
-            await using var db = new AppDbContext(databaseOptions.Options);
-
-            var response = await db.Responses.Where(r =>
-                    r.User.Username == msg.From!.Username && r.Date == DateOnly.FromDateTime(DateTime.UtcNow))
-                .FirstOrDefaultAsync();
-
-            if (response is not null)
-            {
-                response.Availability = Availability.Probably;
-            }
-            else
-            {
-                var user = await db.Users.Where(u => u.Username == msg.From!.Username)
-                    .FirstOrDefaultAsync();
-
-                if (user is null)
-                {
-                    user = new User
-                    {
-                        Username = msg.From!.Username ?? throw new UnreachableException(),
-                        Name = $"{msg.From!.FirstName} {msg.From!.LastName}".Trim(),
-                        IsActive = true
-                    };
-                    await db.Users.AddAsync(user);
-                }
-
-                response = new Response
-                {
-                    Availability = Availability.Probably,
-                    Date = DateOnly.FromDateTime(DateTime.UtcNow),
-                    User = user
-                };
-                await db.Responses.AddAsync(response);
-            }
-
-            await db.SaveChangesAsync();
+            await UpdateResponseForToday(msg, Availability.Probably);
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["😐"]);
 
             break;
@@ -417,12 +317,14 @@ async Task OnCommand(string command, string args, Message msg)
                     linkPreviewOptions: true);
                 return;
             }
-            
+
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: $"Отлично! Игра запланирована на {date.ToString("dd.MM.yyyy (ddd) HH:mm", new CultureInfo("ru-RU"))}", parseMode: ParseMode.Html,
+                text:
+                $"Отлично! Игра запланирована на {date.ToString("dd.MM.yyyy (ddd) HH:mm", new CultureInfo("ru-RU"))}",
+                parseMode: ParseMode.Html,
                 linkPreviewOptions: true);
-            
+
             break;
         }
     }
@@ -480,4 +382,53 @@ async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(Message message,
     ];
 
     return inlineKeyboardButtons;
+}
+
+async Task UpdateResponseForToday(Message message, Availability availability, string? args = null)
+{
+    var time = TimeOnly.MinValue;
+    if (args is not null)
+    {
+        TimeOnly.TryParseExact(args, "HH:mm", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out time);
+    }
+
+    await using var db = new AppDbContext(databaseOptions.Options);
+
+    var response = await db.Responses.Where(r =>
+            r.User.Username == message.From!.Username && r.Date == DateOnly.FromDateTime(DateTime.UtcNow))
+        .FirstOrDefaultAsync();
+
+    if (response is not null)
+    {
+        response.Availability = availability;
+        response.Time = time == TimeOnly.MinValue ? null : time;
+    }
+    else
+    {
+        var user = await db.Users.Where(u => u.Username == message.From!.Username)
+            .FirstOrDefaultAsync();
+
+        if (user is null)
+        {
+            user = new User
+            {
+                Username = message.From!.Username ?? throw new UnreachableException(),
+                Name = $"{message.From!.FirstName} {message.From!.LastName}".Trim(),
+                IsActive = true
+            };
+            await db.Users.AddAsync(user);
+        }
+
+        response = new Response
+        {
+            Availability = availability,
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            Time = time == TimeOnly.MinValue ? null : time,
+            User = user
+        };
+        await db.Responses.AddAsync(response);
+    }
+
+    await db.SaveChangesAsync();
 }

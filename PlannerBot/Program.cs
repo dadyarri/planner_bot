@@ -348,11 +348,7 @@ async Task OnCommand(string command, string args, Message msg)
             }
 
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
-            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text:
-                $"Отлично! Игра запланирована на {date.ToString("dd.MM.yyyy (ddd) HH:mm", new CultureInfo("ru-RU"))}",
-                parseMode: ParseMode.Html,
-                linkPreviewOptions: true);
+            await SavePlannedGame(DateOnly.FromDateTime(date), TimeOnly.FromDateTime(date), msg);
 
             break;
         }

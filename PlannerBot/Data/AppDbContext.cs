@@ -7,6 +7,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options): DbContext(opt
 {
     public DbSet<Response> Responses { get; set; }
     public DbSet<User> Users { get; set; }
+    public DbSet<SavedGame> SavedGame { get; set; }
 }
 
 public class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>

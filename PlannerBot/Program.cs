@@ -73,45 +73,60 @@ async Task OnUpdate(Update update)
                     return;
                 }
 
-                await using var db = new AppDbContext(databaseOptions.Options);
-
-                var user = await db.Users
-                    .Where(u => u.Username == data.Username)
-                    .FirstOrDefaultAsync();
-
-                if (user is null)
-                {
-                    user = new User
-                    {
-                        Name = $"{update.CallbackQuery.From.FirstName} {update.CallbackQuery.From.LastName}".Trim(),
-                        Username = update.CallbackQuery.From.Username,
-                        IsActive = true
-                    };
-                    await db.Users.AddAsync(user);
-                }
-
                 var date = DateOnly.FromDateTime(data.Date);
-                var response = await db.Responses.Where(r =>
-                        r.User.Username == data.Username && r.Date == date)
-                    .FirstOrDefaultAsync();
+                await UpdateResponseForDate(update.CallbackQuery.From, newAvailability, date);
 
-                if (response is null)
+                if (newAvailability == Availability.Yes)
                 {
-                    response = new Response
-                    {
-                        User = user,
-                        Availability = newAvailability,
-                        Date = date,
-                    };
-                    await db.Responses.AddAsync(response);
+                    await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id);
+                    await bot.SendMessage(update.CallbackQuery.Message!.Chat.Id,
+                        messageThreadId: update.CallbackQuery.Message!.MessageThreadId,
+                        text: "Выбери время, начиная с которого ты свободен",
+                        replyMarkup: await GenerateTimeKeyboard(date, data.Username));
+                }
+                else
+                {
+                    await bot.EditMessageReplyMarkup(update.CallbackQuery.Message!.Chat.Id,
+                        update.CallbackQuery.Message.Id,
+                        await GeneratePlanKeyboard(update.CallbackQuery.Message, data.Username));
                 }
 
-                response.Availability = newAvailability;
+                break;
+            }
+            case "ptime":
+            {
+                await using var db = new AppDbContext(databaseOptions.Options);
+                var date = DateOnly.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
+                var time = TimeOnly.ParseExact(split[2], "HH:mm", CultureInfo.InvariantCulture);
+                var username = split[3];
+                
+                if (username != update.CallbackQuery.From.Username)
+                {
+                    await bot.AnswerCallbackQuery(update.CallbackQuery!.Id, "Не твоя кнопка!");
+                    return;
+                }
 
+                var response = await db.Responses
+                    .Include(r => r.User)
+                    .Where(r => r.User.Username == username && r.Date == date)
+                    .FirstOrDefaultAsync();
+
+                response?.Time = time;
                 await db.SaveChangesAsync();
 
+                await bot.DeleteMessage(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id);
+                await bot.SendMessage(update.CallbackQuery.Message!.Chat.Id,
+                    messageThreadId: update.CallbackQuery.Message!.MessageThreadId,
+                    text: "Здесь можно настроить свободные дни в ближайшее время:",
+                    replyMarkup: await GeneratePlanKeyboard(update.CallbackQuery.Message!, username));
+
+                break;
+            }
+            case "pback":
+            {
+                var username = split[1];
                 await bot.EditMessageReplyMarkup(update.CallbackQuery.Message!.Chat.Id, update.CallbackQuery.Message.Id,
-                    await GeneratePlanKeyboard(update.CallbackQuery.Message, data.Username));
+                    await GeneratePlanKeyboard(update.CallbackQuery.Message!, username));
                 break;
             }
             case "save":
@@ -161,13 +176,13 @@ async Task OnCommand(string command, string args, Message msg)
             if (string.IsNullOrEmpty(args))
             {
                 await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                    text: "Укажите время, начиная с которого свободны (любое, кроме 00:00)",
+                    text: "Укажи время, начиная с которого ты свободен (любое, кроме 00:00)",
                     parseMode: ParseMode.Html, linkPreviewOptions: true,
                     replyMarkup: new ReplyKeyboardRemove());
             }
 
             var suitableTime =
-                await UpdateResponseForDate(msg, Availability.Yes, DateOnly.FromDateTime(DateTime.UtcNow), args);
+                await UpdateResponseForDate(msg.From!, Availability.Yes, DateOnly.FromDateTime(DateTime.UtcNow), args);
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["❤"]);
 
             if (suitableTime is not null)
@@ -188,14 +203,14 @@ async Task OnCommand(string command, string args, Message msg)
         }
         case "/no":
         {
-            await UpdateResponseForDate(msg, Availability.No, DateOnly.FromDateTime(DateTime.UtcNow));
+            await UpdateResponseForDate(msg.From!, Availability.No, DateOnly.FromDateTime(DateTime.UtcNow));
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["💩"]);
 
             break;
         }
         case "/prob":
         {
-            await UpdateResponseForDate(msg, Availability.Probably, DateOnly.FromDateTime(DateTime.UtcNow));
+            await UpdateResponseForDate(msg.From!, Availability.Probably, DateOnly.FromDateTime(DateTime.UtcNow));
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["😐"]);
 
             break;
@@ -223,11 +238,20 @@ async Task OnCommand(string command, string args, Message msg)
 
                 foreach (var user in users)
                 {
-                    var availability = (await db.Responses
+                    var response = (await db.Responses
                         .Where(r => r.Date == date && r.User.Username == user.Username)
-                        .FirstOrDefaultAsync())?.Availability ?? Availability.Unknown;
+                        .FirstOrDefaultAsync());
 
-                    sb.AppendLine($"{user.Name}: <i>{availability.ToSign()}</i>");
+                    var time = string.Empty;
+
+                    if (response is not null && response.Availability == Availability.Yes &&
+                        response.Date != default)
+                    {
+                        time = $" (с {response.Time:HH:mm})";
+                    }
+
+                    sb.AppendLine(
+                        $"{user.Name}: <i>{(response?.Availability ?? Availability.Unknown).ToSign()}{time}</i>");
                 }
 
                 sb.AppendLine();
@@ -352,6 +376,15 @@ async Task OnCommand(string command, string args, Message msg)
 
             break;
         }
+        case "/test":
+        {
+            var clock = await GenerateTimeKeyboard(DateOnly.FromDateTime(DateTime.Now));
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "Здесь можно настроить свободные дни в ближайшее время:", parseMode: ParseMode.Html,
+                linkPreviewOptions: true,
+                replyMarkup: clock);
+            break;
+        }
     }
 }
 
@@ -409,7 +442,7 @@ async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(Message message,
     return inlineKeyboardButtons;
 }
 
-async Task<TimeOnly?> UpdateResponseForDate(Message message, Availability availability, DateOnly date,
+async Task<TimeOnly?> UpdateResponseForDate(Telegram.Bot.Types.User from, Availability availability, DateOnly date,
     string? args = null)
 {
     var time = TimeOnly.MinValue;
@@ -422,7 +455,7 @@ async Task<TimeOnly?> UpdateResponseForDate(Message message, Availability availa
     await using var db = new AppDbContext(databaseOptions.Options);
 
     var response = await db.Responses.Where(r =>
-            r.User.Username == message.From!.Username && r.Date == date)
+            r.User.Username == from.Username && r.Date == date)
         .FirstOrDefaultAsync();
 
     if (response is not null)
@@ -432,15 +465,15 @@ async Task<TimeOnly?> UpdateResponseForDate(Message message, Availability availa
     }
     else
     {
-        var user = await db.Users.Where(u => u.Username == message.From!.Username)
+        var user = await db.Users.Where(u => u.Username == from.Username)
             .FirstOrDefaultAsync();
 
         if (user is null)
         {
             user = new User
             {
-                Username = message.From!.Username ?? throw new UnreachableException(),
-                Name = $"{message.From!.FirstName} {message.From!.LastName}".Trim(),
+                Username = from.Username ?? throw new UnreachableException(),
+                Name = $"{from.FirstName} {from.LastName}".Trim(),
                 IsActive = true
             };
             await db.Users.AddAsync(user);
@@ -460,6 +493,49 @@ async Task<TimeOnly?> UpdateResponseForDate(Message message, Availability availa
 
     var suitableTime = await CheckIfDateIsAvailable(date);
     return suitableTime;
+}
+
+async Task<InlineKeyboardButton[][]> GenerateTimeKeyboard(
+    DateOnly date,
+    string? username = null)
+{
+    await using var db = new AppDbContext(databaseOptions.Options);
+
+    var start = new TimeOnly(9, 0);
+    var end = new TimeOnly(20, 30);
+    var step = TimeSpan.FromMinutes(30);
+
+    const int slotsPerRow = 4;
+
+    var buttons = new List<InlineKeyboardButton[]>();
+    var currentRow = new List<InlineKeyboardButton>();
+
+    for (var time = start; time <= end; time = time.Add(step))
+    {
+        currentRow.Add(
+            InlineKeyboardButton.WithCallbackData(
+                $"{time:HH:mm}",
+                $"ptime;{date:dd/MM/yyyy};{time:HH:mm};{username}"
+            )
+        );
+
+        if (currentRow.Count != slotsPerRow) continue;
+        buttons.Add(currentRow.ToArray());
+        currentRow.Clear();
+    }
+
+    if (currentRow.Count > 0)
+        buttons.Add(currentRow.ToArray());
+
+    buttons.Add(
+    [
+        InlineKeyboardButton.WithCallbackData(
+            "Назад",
+            $"pback;{username}"
+        )
+    ]);
+
+    return buttons.ToArray();
 }
 
 async Task<TimeOnly?> CheckIfDateIsAvailable(DateOnly date)

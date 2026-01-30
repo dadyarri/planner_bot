@@ -132,7 +132,7 @@ async Task OnCommand(string command, string args, Message msg)
                     /yes hh:mm - Указать, что могу играть сегодня (с указанием времени)
                     /no - Указать, что не могу играть сегодня
                     /prob - Указать, что возможно могу сегодня
-                    /plan - Запланировать на две недели
+                    /plan - Запланировать на 8 дней
 
                     /pause - Приостановить участие в играх
                     /unpause - Восстановить участие в играх
@@ -147,26 +147,41 @@ async Task OnCommand(string command, string args, Message msg)
             if (string.IsNullOrEmpty(args))
             {
                 await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                    text: "Укажите время, начиная с которого свободны",
+                    text: "Укажите время, начиная с которого свободны (любое, кроме 00:00)",
                     parseMode: ParseMode.Html, linkPreviewOptions: true,
                     replyMarkup: new ReplyKeyboardRemove());
             }
 
-            await UpdateResponseForToday(msg, Availability.Yes, args);
+            var suitableTime =
+                await UpdateResponseForDate(msg, Availability.Yes, DateOnly.FromDateTime(DateTime.UtcNow), args);
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["❤"]);
+
+            if (suitableTime is not null)
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: $"Ура! Сегодня все могут! Удобное время: <b>{suitableTime:HH:mm}</b>",
+                    parseMode: ParseMode.Html, linkPreviewOptions: true,
+                    replyMarkup: new InlineKeyboardMarkup(
+                        InlineKeyboardButton.WithCallbackData("Сохранить",
+                            $"save;{today:dd/MM/yyyy};{suitableTime:HH:mm}")
+                    )
+                );
+            }
+
 
             break;
         }
         case "/no":
         {
-            await UpdateResponseForToday(msg, Availability.No);
+            await UpdateResponseForDate(msg, Availability.No, DateOnly.FromDateTime(DateTime.UtcNow));
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["💩"]);
 
             break;
         }
         case "/prob":
         {
-            await UpdateResponseForToday(msg, Availability.Probably);
+            await UpdateResponseForDate(msg, Availability.Probably, DateOnly.FromDateTime(DateTime.UtcNow));
             await bot.SetMessageReaction(msg.Chat, msg.Id, ["😐"]);
 
             break;
@@ -182,7 +197,7 @@ async Task OnCommand(string command, string args, Message msg)
             var usernames = users.Select(u => u.Username).ToList();
 
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
-            var end = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(13));
+            var end = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(6));
 
             var sb = new StringBuilder();
 
@@ -384,7 +399,8 @@ async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(Message message,
     return inlineKeyboardButtons;
 }
 
-async Task UpdateResponseForToday(Message message, Availability availability, string? args = null)
+async Task<TimeOnly?> UpdateResponseForDate(Message message, Availability availability, DateOnly date,
+    string? args = null)
 {
     var time = TimeOnly.MinValue;
     if (args is not null)
@@ -396,7 +412,7 @@ async Task UpdateResponseForToday(Message message, Availability availability, st
     await using var db = new AppDbContext(databaseOptions.Options);
 
     var response = await db.Responses.Where(r =>
-            r.User.Username == message.From!.Username && r.Date == DateOnly.FromDateTime(DateTime.UtcNow))
+            r.User.Username == message.From!.Username && r.Date == date)
         .FirstOrDefaultAsync();
 
     if (response is not null)
@@ -423,7 +439,7 @@ async Task UpdateResponseForToday(Message message, Availability availability, st
         response = new Response
         {
             Availability = availability,
-            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            Date = date,
             Time = time == TimeOnly.MinValue ? null : time,
             User = user
         };
@@ -431,4 +447,39 @@ async Task UpdateResponseForToday(Message message, Availability availability, st
     }
 
     await db.SaveChangesAsync();
+    
+    var suitableTime = await CheckIfDateIsAvailable(date);
+    return suitableTime;
+}
+
+async Task<TimeOnly?> CheckIfDateIsAvailable(DateOnly date)
+{
+    await using var db = new AppDbContext(databaseOptions.Options);
+
+    var activeUsersCount = await db.Users
+        .Where(u => u.IsActive)
+        .CountAsync();
+
+    var responses = await db.Responses
+        .Where(r =>
+            r.Date == date &&
+            r.User.IsActive)
+        .Select(r => new
+        {
+            r.Availability,
+            r.Time
+        })
+        .ToListAsync();
+
+    if (responses.Count != activeUsersCount || responses.Any(r =>
+            r.Availability is Availability.No or Availability.Unknown))
+        return null;
+
+    if (responses.Any(r => r.Time == null))
+        return null;
+
+    var commonTime = responses
+        .Max(r => r.Time!.Value);
+
+    return commonTime;
 }

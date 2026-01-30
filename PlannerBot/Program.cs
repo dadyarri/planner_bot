@@ -378,15 +378,6 @@ async Task OnCommand(string command, string args, Message msg)
 
             break;
         }
-        case "/test":
-        {
-            var clock = await GenerateTimeKeyboard(DateOnly.FromDateTime(DateTime.Now));
-            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "Здесь можно настроить свободные дни в ближайшее время:", parseMode: ParseMode.Html,
-                linkPreviewOptions: true,
-                replyMarkup: clock);
-            break;
-        }
     }
 }
 

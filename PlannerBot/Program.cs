@@ -116,39 +116,10 @@ async Task OnUpdate(Update update)
             }
             case "save":
             {
-                var now = DateTime.Now;
                 var date = DateOnly.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
                 var time = TimeOnly.ParseExact(split[2], "HH:mm", CultureInfo.InvariantCulture);
 
-                await using var db = new AppDbContext(databaseOptions.Options);
-                await db.SavedGame.Where(sg => sg.Date <= DateOnly.FromDateTime(now)).ExecuteDeleteAsync();
-
-                await db.AddAsync(new SavedGame
-                {
-                    Date = date,
-                    Time = time
-                });
-
-                await db.SaveChangesAsync();
-
-                var sb = new StringBuilder();
-
-                foreach (var game in db.SavedGame)
-                {
-                    var dateStr = game.Date.ToString("dd.MM.yyyy (ddd)", new CultureInfo("ru-RU"));
-                    var timeStr = game.Time.ToString("HH:mm", new CultureInfo("ru-RU"));
-                    sb.AppendLine($"- {dateStr} {timeStr}");
-                }
-
-                await bot.SendMessage(update.CallbackQuery.Message!.Chat.Id,
-                    messageThreadId: update.CallbackQuery.Message!.MessageThreadId,
-                    text: $"""
-                          Игра сохранена! Запланированные игры:
-                          
-                          {sb}
-                          """,
-                    parseMode: ParseMode.Html, linkPreviewOptions: true,
-                    replyMarkup: new ReplyKeyboardRemove());
+                await SavePlannedGame(date, time, update.CallbackQuery.Message!);
 
                 break;
             }
@@ -525,4 +496,39 @@ async Task<TimeOnly?> CheckIfDateIsAvailable(DateOnly date)
         .Max(r => r.Time!.Value);
 
     return commonTime;
+}
+
+async Task SavePlannedGame(DateOnly date, TimeOnly time, Message message)
+{
+    var now = DateTime.Now;
+
+    await using var db = new AppDbContext(databaseOptions.Options);
+    await db.SavedGame.Where(sg => sg.Date <= DateOnly.FromDateTime(now)).ExecuteDeleteAsync();
+
+    await db.AddAsync(new SavedGame
+    {
+        Date = date,
+        Time = time
+    });
+
+    await db.SaveChangesAsync();
+
+    var sb = new StringBuilder();
+
+    foreach (var game in db.SavedGame)
+    {
+        var dateStr = game.Date.ToString("dd.MM.yyyy (ddd)", new CultureInfo("ru-RU"));
+        var timeStr = game.Time.ToString("HH:mm", new CultureInfo("ru-RU"));
+        sb.AppendLine($"- {dateStr} {timeStr}");
+    }
+
+    await bot.SendMessage(message.Chat.Id,
+        messageThreadId: message.MessageThreadId,
+        text: $"""
+               Игра сохранена! Запланированные игры:
+
+               {sb}
+               """,
+        parseMode: ParseMode.Html, linkPreviewOptions: true,
+        replyMarkup: new ReplyKeyboardRemove());
 }

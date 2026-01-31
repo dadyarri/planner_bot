@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Design;
 using TickerQ.EntityFrameworkCore.Configurations;
 using TickerQ.Utilities.Entities;
 
@@ -18,18 +17,5 @@ public class AppDbContext(DbContextOptions<AppDbContext> options): DbContext(opt
         modelBuilder.ApplyConfiguration(new TimeTickerConfigurations<TimeTickerEntity>());
         modelBuilder.ApplyConfiguration(new CronTickerConfigurations<CronTickerEntity>());
         modelBuilder.ApplyConfiguration(new CronTickerOccurrenceConfigurations<CronTickerEntity>());
-    }
-}
-
-public class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
-{
-    public AppDbContext CreateDbContext(string[] args)
-    {
-        var optionsBuilder = new DbContextOptionsBuilder<AppDbContext>();
-        var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL") ??
-                          throw new Exception("DATABASE_URL environment variable not set");
-        optionsBuilder.UseNpgsql(databaseUrl);
-
-        return new AppDbContext(optionsBuilder.Options);
     }
 }

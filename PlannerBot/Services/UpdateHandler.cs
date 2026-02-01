@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using PlannerBot.Data;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;

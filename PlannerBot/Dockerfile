@@ -1,4 +1,4 @@
-﻿FROM mcr.microsoft.com/dotnet/runtime:10.0 AS base
+﻿FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
 USER root
 WORKDIR /app
 RUN apt update && apt install libgssapi-krb5-2 -y

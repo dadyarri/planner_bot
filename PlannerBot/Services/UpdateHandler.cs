@@ -294,6 +294,31 @@ public class UpdateHandler(
     private async Task HandleNoCommand(Message msg)
     {
         await UpdateResponseForDate(msg.From!, Availability.No, DateOnly.FromDateTime(DateTime.Now));
+
+        var now = DateOnly.FromDateTime(DateTime.Now);
+        var savedGamesForToday = await db.SavedGame
+            .Where(sg => sg.Date == now)
+            .ToListAsync();
+
+        foreach (var savedGame in savedGamesForToday)
+        {
+            var jobIds = await db.Set<TimeTickerEntity>()
+                .Where(t => t.ExecutionTime!.Value.Date ==
+                            new DateTime(savedGame.Date, TimeOnly.MinValue, DateTimeKind.Utc))
+                .Select(t => t.Id)
+                .ToListAsync();
+
+            await ticker.DeleteBatchAsync(jobIds);
+        }
+
+        if (savedGamesForToday.Count != 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "Сегодняшняя игра была отменена",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new ReplyKeyboardRemove());
+        }
+
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["💩"]);
     }
 

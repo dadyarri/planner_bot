@@ -35,9 +35,10 @@ builder.Services.AddTickerQ(options =>
 });
 
 var app = builder.Build();
-app.UseTickerQ();
 
 await using var db = app.Services.GetRequiredService<AppDbContext>();
 await db.Database.MigrateAsync();
+
+app.UseTickerQ();
 
 await app.RunAsync();

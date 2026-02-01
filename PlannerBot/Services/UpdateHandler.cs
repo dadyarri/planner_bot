@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using Humanizer;
 using Microsoft.EntityFrameworkCore;
+using PlannerBot.Background;
 using PlannerBot.Data;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
@@ -9,12 +11,25 @@ using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using TickerQ.Utilities;
+using TickerQ.Utilities.Entities;
+using TickerQ.Utilities.Interfaces.Managers;
 using User = PlannerBot.Data.User;
 
 namespace PlannerBot.Services;
 
-public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger, AppDbContext db) : IUpdateHandler
+public class UpdateHandler(
+    ITelegramBotClient bot,
+    ILogger<UpdateHandler> logger,
+    AppDbContext db,
+    ITimeTickerManager<TimeTickerEntity> ticker) : IUpdateHandler
 {
+    private static readonly TimeSpan[] ReminderIntervals =
+    [
+        TimeSpan.FromHours(24), TimeSpan.FromHours(5), TimeSpan.FromHours(3), TimeSpan.FromHours(1),
+        TimeSpan.FromMinutes(10)
+    ];
+
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
         CancellationToken cancellationToken)
     {
@@ -139,10 +154,10 @@ public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger
             }
             case "save":
             {
-                var date = DateOnly.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
-                var time = TimeOnly.ParseExact(split[2], "HH:mm", CultureInfo.InvariantCulture);
+                var dateTime = DateTime.ParseExact($"{split[1]};{split[2]}", "dd/MM/yyyy;HH:mm",
+                    new CultureInfo("ru-RU"));
 
-                await SavePlannedGame(date, time, callbackQuery.Message!);
+                await SavePlannedGame(dateTime, callbackQuery.Message!);
 
                 break;
             }
@@ -152,7 +167,7 @@ public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger
 
                 for (var i = 0; i < 8; i++)
                 {
-                    var date = DateTime.UtcNow.AddDays(i);
+                    var date = DateTime.Now.AddDays(i);
                     var suitableTime = await CheckIfDateIsAvailable(DateOnly.FromDateTime(date));
 
                     if (suitableTime is not null)
@@ -258,13 +273,13 @@ public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger
         }
 
         var suitableTime =
-            await UpdateResponseForDate(msg.From!, Availability.Yes, DateOnly.FromDateTime(DateTime.UtcNow),
+            await UpdateResponseForDate(msg.From!, Availability.Yes, DateOnly.FromDateTime(DateTime.Now),
                 args);
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["❤"]);
 
         if (suitableTime is not null)
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var today = DateOnly.FromDateTime(DateTime.Now);
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: $"Ура! Сегодня все могут! Удобное время: <b>{suitableTime:HH:mm}</b>",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,
@@ -278,13 +293,13 @@ public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger
 
     private async Task HandleNoCommand(Message msg)
     {
-        await UpdateResponseForDate(msg.From!, Availability.No, DateOnly.FromDateTime(DateTime.UtcNow));
+        await UpdateResponseForDate(msg.From!, Availability.No, DateOnly.FromDateTime(DateTime.Now));
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["💩"]);
     }
 
     private async Task HandleProbablyCommand(Message msg)
     {
-        await UpdateResponseForDate(msg.From!, Availability.Probably, DateOnly.FromDateTime(DateTime.UtcNow));
+        await UpdateResponseForDate(msg.From!, Availability.Probably, DateOnly.FromDateTime(DateTime.Now));
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["😐"]);
     }
 
@@ -296,14 +311,14 @@ public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger
 
         var usernames = users.Select(u => u.Username).ToList();
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var end = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(6));
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var end = DateOnly.FromDateTime(DateTime.Now.AddDays(6));
 
         var sb = new StringBuilder();
 
         for (var i = 0; i < 7; i++)
         {
-            var date = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(i));
+            var date = DateOnly.FromDateTime(DateTime.Now.AddDays(i));
             sb.AppendLine($"<b>{date.ToString("dd MMM (ddd)", new CultureInfo("ru-RU"))}</b>");
             sb.AppendLine();
 
@@ -434,7 +449,7 @@ public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger
             return;
         }
 
-        await SavePlannedGame(DateOnly.FromDateTime(date), TimeOnly.FromDateTime(date), msg);
+        await SavePlannedGame(date, msg);
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
     }
 
@@ -619,9 +634,11 @@ public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger
         return commonTime;
     }
 
-    async Task SavePlannedGame(DateOnly date, TimeOnly time, Message message)
+    async Task SavePlannedGame(DateTime dateTime, Message message)
     {
-        var now = DateTime.UtcNow;
+        var now = DateTime.Now;
+        var date = DateOnly.FromDateTime(dateTime);
+        var time = TimeOnly.FromDateTime(dateTime);
 
         await db.SavedGame.Where(sg => sg.Date <= DateOnly.FromDateTime(now)).ExecuteDeleteAsync();
 
@@ -635,6 +652,40 @@ public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger
         }
 
         await db.SaveChangesAsync();
+
+        var timeUntilGame = dateTime - now;
+        var activePlayerTags = await db.Users
+            .Where(u => u.IsActive)
+            .Select(u => $"@{u.Username}")
+            .ToListAsync();
+
+        foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
+        {
+            var executionTime = dateTime.Add(-timeSpan);
+
+            var text = $"""
+                        {string.Join(", ", activePlayerTags)}
+
+                        АХТУНГ! Игра через {timeSpan.Humanize(culture: new CultureInfo("ru-RU"), toWords: true)}
+                        """;
+
+            var schedulingResult = await ticker.AddAsync(new TimeTickerEntity
+            {
+                Function = "send_reminder",
+                ExecutionTime = executionTime,
+                Request = TickerHelper.CreateTickerRequest(new SendReminderJobContext
+                {
+                    Message = text,
+                    ChatId = message.Chat.Id,
+                    ThreadId = message.MessageThreadId
+                }),
+            });
+
+            if (schedulingResult.IsSucceeded)
+            {
+                logger.LogInformation("Reminder scheduled to {DateTime:yyyy-MM-dd HH:mm:ss}.", executionTime);
+            }
+        }
 
         var sb = new StringBuilder();
 

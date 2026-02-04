@@ -26,7 +26,7 @@ public partial class UpdateHandler(
 {
     private static readonly TimeSpan[] ReminderIntervals =
     [
-        TimeSpan.FromHours(24), TimeSpan.FromHours(5), TimeSpan.FromHours(3), TimeSpan.FromHours(1),
+        TimeSpan.FromHours(48), TimeSpan.FromHours(24), TimeSpan.FromHours(5), TimeSpan.FromHours(3), TimeSpan.FromHours(1),
         TimeSpan.FromMinutes(10)
     ];
 

@@ -18,7 +18,7 @@ using User = PlannerBot.Data.User;
 
 namespace PlannerBot.Services;
 
-public class UpdateHandler(
+public partial class UpdateHandler(
     ITelegramBotClient bot,
     ILogger<UpdateHandler> logger,
     AppDbContext db,
@@ -45,7 +45,7 @@ public class UpdateHandler(
     public async Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source,
         CancellationToken cancellationToken)
     {
-        logger.LogError("HandleError: {Exception}", exception);
+        LogHandleerrorException(logger, exception);
         // Cooldown in case of network connection error
         if (exception is RequestException)
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
@@ -55,7 +55,7 @@ public class UpdateHandler(
     {
         if (msg.Text is not { } text)
         {
-            logger.LogInformation("Received a message of type {MessageType}", msg.Type);
+            LogReceivedAMessageOfTypeMessagetype(logger, msg.Type);
         }
         else if (text.StartsWith('/'))
         {
@@ -78,10 +78,12 @@ public class UpdateHandler(
     private async Task OnCallbackQuery(CallbackQuery callbackQuery)
     {
         var split = callbackQuery.Data!.Split(";");
+        LogReceivedCallbackQueryCqcommand(logger, split[0]);
         switch (split[0])
         {
             case "plan":
             {
+                LogReceivedPlanCommand(logger);
                 var availability = int.Parse(split[1]);
                 var data = new PlanButtonCallback
                 {
@@ -93,6 +95,7 @@ public class UpdateHandler(
 
                 if (data.Username != callbackQuery.From.Username)
                 {
+                    LogWrongUserUsedPlanCommand(logger, data.Username, callbackQuery.From.Username!);
                     await bot.AnswerCallbackQuery(callbackQuery.Id, "Не твоя кнопка!");
                     return;
                 }
@@ -119,12 +122,15 @@ public class UpdateHandler(
             }
             case "ptime":
             {
+                LogReceivedPtimeCommand(logger);
+
                 var date = DateOnly.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
                 var time = TimeOnly.ParseExact(split[2], "HH:mm", CultureInfo.InvariantCulture);
                 var username = split[3];
 
                 if (username != callbackQuery.From.Username)
                 {
+                    LogWrongUserUsedPtimeButtonDataCq(logger, username, callbackQuery.From.Username!);
                     await bot.AnswerCallbackQuery(callbackQuery.Id, "Не твоя кнопка!");
                     return;
                 }
@@ -147,7 +153,15 @@ public class UpdateHandler(
             }
             case "pback":
             {
+                LogReceivedPbackCommand(logger);
                 var username = split[1];
+
+                if (username != callbackQuery.From.Username)
+                {
+                    await bot.AnswerCallbackQuery(callbackQuery.Id, "Не твоя кнопка!");
+                    return;
+                }
+
                 await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                     await GeneratePlanKeyboard(callbackQuery.Message!, username));
                 break;
@@ -193,7 +207,7 @@ public class UpdateHandler(
 
     private async Task OnCommand(string command, string args, Message msg)
     {
-        logger.LogInformation("Received command: {Command} {Args}", command, args);
+        LogReceivedCommandCommandArgs(logger, command, args);
         switch (command)
         {
             case "/start":
@@ -480,7 +494,7 @@ public class UpdateHandler(
 
     private Task UnknownUpdateHandlerAsync(Update update)
     {
-        logger.LogInformation("Unknown update type: {UpdateType}", update.Type);
+        LogUnknownUpdateTypeUpdatetype(logger, update.Type);
         return Task.CompletedTask;
     }
 
@@ -661,7 +675,7 @@ public class UpdateHandler(
 
     async Task SavePlannedGame(DateTime dateTime, Message message)
     {
-        var now = DateTime.Now;
+        var now = DateTime.Now.ToLocalTime();
         var date = DateOnly.FromDateTime(dateTime);
         var time = TimeOnly.FromDateTime(dateTime);
 
@@ -708,7 +722,7 @@ public class UpdateHandler(
 
             if (schedulingResult.IsSucceeded)
             {
-                logger.LogInformation("Reminder scheduled to {DateTime:yyyy-MM-dd HH:mm:ss}.", executionTime);
+                LogReminderScheduledTo(logger, executionTime);
             }
         }
 

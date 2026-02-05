@@ -214,10 +214,10 @@ public partial class UpdateHandler(
             {
                 await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
 
-                var moscowNow = GetMoscowDateTime();
+                var now = DateTime.UtcNow;
                 for (var i = 0; i < 8; i++)
                 {
-                    var date = moscowNow.AddDays(i).Date;
+                    var date = now.AddDays(i).Date;
                     var suitableTime = await CheckIfDateIsAvailable(date);
 
                     if (suitableTime is not null)

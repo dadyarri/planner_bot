@@ -24,11 +24,41 @@ public partial class UpdateHandler(
     AppDbContext db,
     ITimeTickerManager<TimeTickerEntity> ticker) : IUpdateHandler
 {
+    private readonly CultureInfo _russianCultureInfo = new("ru-RU");
+
     private static readonly TimeSpan[] ReminderIntervals =
     [
-        TimeSpan.FromHours(48), TimeSpan.FromHours(24), TimeSpan.FromHours(5), TimeSpan.FromHours(3), TimeSpan.FromHours(1),
+        TimeSpan.FromHours(48), TimeSpan.FromHours(24), TimeSpan.FromHours(5), TimeSpan.FromHours(3),
+        TimeSpan.FromHours(1),
         TimeSpan.FromMinutes(10)
     ];
+
+    private static readonly TimeZoneInfo MoscowTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Moscow");
+
+    private DateTime ConvertToUtc(DateTime localTime)
+    {
+        if (localTime.Kind == DateTimeKind.Utc)
+            return localTime;
+        return TimeZoneInfo.ConvertTimeToUtc(localTime, MoscowTimeZone);
+    }
+
+    private DateTime ConvertToMoscow(DateTime utcTime)
+    {
+        if (utcTime.Kind != DateTimeKind.Utc)
+            utcTime = DateTime.SpecifyKind(utcTime, DateTimeKind.Utc);
+        return TimeZoneInfo.ConvertTime(utcTime, MoscowTimeZone);
+    }
+
+    private DateTime GetMoscowDate()
+    {
+        var moscowNow = ConvertToMoscow(DateTime.UtcNow);
+        return moscowNow.Date;
+    }
+
+    private DateTime GetMoscowDateTime()
+    {
+        return ConvertToMoscow(DateTime.UtcNow);
+    }
 
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
         CancellationToken cancellationToken)
@@ -100,7 +130,7 @@ public partial class UpdateHandler(
                     return;
                 }
 
-                var date = DateOnly.FromDateTime(data.Date);
+                var date = DateTime.SpecifyKind(data.Date.Date, DateTimeKind.Utc);
                 await UpdateResponseForDate(callbackQuery.From, newAvailability, date);
 
                 if (newAvailability == Availability.Yes)
@@ -124,9 +154,11 @@ public partial class UpdateHandler(
             {
                 LogReceivedPtimeCommand(logger);
 
-                var date = DateOnly.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
-                var time = TimeOnly.ParseExact(split[2], "HH:mm", CultureInfo.InvariantCulture);
-                var username = split[3];
+                var dateTime = DateTime.SpecifyKind(
+                    DateTime.ParseExact(split[1], "dd/MM/yyyyTHH:mm", CultureInfo.InvariantCulture),
+                    DateTimeKind.Utc
+                );
+                var username = split[2];
 
                 if (username != callbackQuery.From.Username)
                 {
@@ -135,12 +167,15 @@ public partial class UpdateHandler(
                     return;
                 }
 
+                var utcDateTime = ConvertToUtc(dateTime);
+
                 var response = await db.Responses
                     .Include(r => r.User)
-                    .Where(r => r.User.Username == username && r.Date == date)
+                    .Where(r => r.User.Username == username &&
+                                r.DateTime.HasValue && r.DateTime.Value.Date == utcDateTime.Date)
                     .FirstOrDefaultAsync();
 
-                response?.Time = time;
+                response?.DateTime = utcDateTime;
                 await db.SaveChangesAsync();
 
                 await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
@@ -169,7 +204,7 @@ public partial class UpdateHandler(
             case "save":
             {
                 var dateTime = DateTime.ParseExact($"{split[1]};{split[2]}", "dd/MM/yyyy;HH:mm",
-                    new CultureInfo("ru-RU"));
+                    _russianCultureInfo);
 
                 await SavePlannedGame(dateTime, callbackQuery.Message!);
 
@@ -179,20 +214,23 @@ public partial class UpdateHandler(
             {
                 await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
 
+                var moscowNow = GetMoscowDateTime();
                 for (var i = 0; i < 8; i++)
                 {
-                    var date = DateTime.Now.AddDays(i);
-                    var suitableTime = await CheckIfDateIsAvailable(DateOnly.FromDateTime(date));
+                    var date = moscowNow.AddDays(i).Date;
+                    var suitableTime = await CheckIfDateIsAvailable(date);
 
                     if (suitableTime is not null)
                     {
+                        date = date.Add(suitableTime.Value.TimeOfDay);
                         await bot.SendMessage(callbackQuery.Message!.Chat.Id,
                             messageThreadId: callbackQuery.Message.MessageThreadId,
-                            text: $"Ура! {date:dd.MM.yyyy} все могут! Удобное время: <b>{suitableTime:HH:mm}</b>",
+                            text:
+                            $"Ура! {date:dd.MM.yyyy} все могут! Удобное время: <b>{date:HH:mm}</b>",
                             parseMode: ParseMode.Html, linkPreviewOptions: true,
                             replyMarkup: new InlineKeyboardMarkup(
                                 InlineKeyboardButton.WithCallbackData("Сохранить",
-                                    $"save;{date:dd/MM/yyyy};{suitableTime:HH:mm}")
+                                    $"save;{date:dd/MM/yyyy;HH:mm}")
                             )
                         );
                     }
@@ -284,22 +322,23 @@ public partial class UpdateHandler(
                 text: "Укажи время, начиная с которого ты свободен (любое, кроме 00:00)",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,
                 replyMarkup: new ReplyKeyboardRemove());
+            return;
         }
 
         var suitableTime =
-            await UpdateResponseForDate(msg.From!, Availability.Yes, DateOnly.FromDateTime(DateTime.Now),
+            await UpdateResponseForDate(msg.From!, Availability.Yes, GetMoscowDate(),
                 args);
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["❤"]);
 
         if (suitableTime is not null)
         {
-            var today = DateOnly.FromDateTime(DateTime.Now);
+            var today = GetMoscowDate().Add(suitableTime.Value.TimeOfDay);
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: $"Ура! Сегодня все могут! Удобное время: <b>{suitableTime:HH:mm}</b>",
+                text: $"Ура! Сегодня все могут! Удобное время: <b>{today:HH:mm}</b>",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,
                 replyMarkup: new InlineKeyboardMarkup(
                     InlineKeyboardButton.WithCallbackData("Сохранить",
-                        $"save;{today:dd/MM/yyyy};{suitableTime:HH:mm}")
+                        $"save;{today:dd/MM/yyyy;HH:mm}")
                 )
             );
         }
@@ -307,18 +346,17 @@ public partial class UpdateHandler(
 
     private async Task HandleNoCommand(Message msg)
     {
-        await UpdateResponseForDate(msg.From!, Availability.No, DateOnly.FromDateTime(DateTime.Now));
+        await UpdateResponseForDate(msg.From!, Availability.No, GetMoscowDate());
 
-        var now = DateOnly.FromDateTime(DateTime.Now);
+        var now = DateTime.UtcNow;
         var savedGamesForToday = await db.SavedGame
-            .Where(sg => sg.Date == now)
+            .Where(sg => sg.DateTime.Date == now.Date)
             .ToListAsync();
 
         foreach (var savedGame in savedGamesForToday)
         {
             var jobIds = await db.Set<TimeTickerEntity>()
-                .Where(t => t.ExecutionTime!.Value.Date ==
-                            new DateTime(savedGame.Date, TimeOnly.MinValue, DateTimeKind.Utc))
+                .Where(t => t.ExecutionTime!.Value.Date == savedGame.DateTime)
                 .Select(t => t.Id)
                 .ToListAsync();
 
@@ -338,7 +376,7 @@ public partial class UpdateHandler(
 
     private async Task HandleProbablyCommand(Message msg)
     {
-        await UpdateResponseForDate(msg.From!, Availability.Probably, DateOnly.FromDateTime(DateTime.Now));
+        await UpdateResponseForDate(msg.From!, Availability.Probably, GetMoscowDate());
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["😐"]);
     }
 
@@ -350,29 +388,37 @@ public partial class UpdateHandler(
 
         var usernames = users.Select(u => u.Username).ToList();
 
-        var today = DateOnly.FromDateTime(DateTime.Now);
-        var end = DateOnly.FromDateTime(DateTime.Now.AddDays(6));
+        var now = DateTime.UtcNow;
+        var today = now.Date;
+        var end = now.AddDays(6).Date;
 
         var sb = new StringBuilder();
 
         for (var i = 0; i < 7; i++)
         {
-            var date = DateOnly.FromDateTime(DateTime.Now.AddDays(i));
-            sb.AppendLine($"<b>{date.ToString("dd MMM (ddd)", new CultureInfo("ru-RU"))}</b>");
+            var date = now.AddDays(i).Date;
+            sb.AppendLine($"<b>{date.ToString("dd MMM (ddd)", _russianCultureInfo)}</b>");
             sb.AppendLine();
 
             foreach (var user in users)
             {
-                var response = (await db.Responses
-                    .Where(r => r.Date == date && r.User.Username == user.Username)
-                    .FirstOrDefaultAsync());
+                var responseDateTime = await db.Responses
+                    .Where(r => r.DateTime.HasValue && r.DateTime.Value.Date == date &&
+                                r.User.Username == user.Username)
+                    .Select(r => r.DateTime)
+                    .FirstOrDefaultAsync();
+
+                var response = await db.Responses
+                    .Where(r => r.DateTime == responseDateTime && r.User.Username == user.Username)
+                    .FirstOrDefaultAsync();
 
                 var time = string.Empty;
 
-                if (response is not null && response.Availability == Availability.Yes &&
-                    response.Date != default)
+                if (response is { Availability: Availability.Yes, DateTime: not null } &&
+                    response.DateTime.Value.TimeOfDay != TimeSpan.Zero)
                 {
-                    time = $" (с {response.Time:HH:mm})";
+                    var moscowTime = ConvertToMoscow(response.DateTime.Value);
+                    time = $" (с {moscowTime:HH:mm})";
                 }
 
                 sb.AppendLine(
@@ -384,10 +430,11 @@ public partial class UpdateHandler(
 
         var nearestFittingDate = await db.Responses
             .Include(v => v.User)
-            .Where(v => v.Date >= today &&
-                        v.Date <= end &&
+            .Where(v => v.DateTime.HasValue &&
+                        v.DateTime.Value.Date >= today &&
+                        v.DateTime.Value.Date <= end &&
                         usernames.Contains(v.User.Username) && v.User.IsActive)
-            .GroupBy(v => v.Date)
+            .GroupBy(v => v.DateTime!.Value.Date)
             .Where(g =>
                 g.Count() == usernames.Count && // все пользователи проголосовали
                 g.All(v => v.Availability != Availability.No)) // нет отказов
@@ -397,8 +444,10 @@ public partial class UpdateHandler(
 
         var availableTime = await CheckIfDateIsAvailable(nearestFittingDate);
 
+        var formattedDate = nearestFittingDate.ToString("dd MMM (ddd)", _russianCultureInfo);
+        var formattedTime = availableTime.HasValue ? availableTime.Value.ToString("hh:mm") : string.Empty;
         var format = nearestFittingDate != default
-            ? $"{nearestFittingDate.ToString("dd MMM (ddd)", new CultureInfo("ru-RU"))}{availableTime?.ToString(" HH:mm") ?? string.Empty}"
+            ? $"{formattedDate} {formattedTime}"
             : "не найдено";
 
         sb.Append($"<b>Ближайшая удобная дата</b>: {format}");
@@ -502,7 +551,8 @@ public partial class UpdateHandler(
     async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(Message message,
         string? username = null)
     {
-        var today = DateTime.Today;
+        var now = DateTime.UtcNow;
+        var today = now.Date;
 
         const int weeks = 2;
         const int daysInWeek = 4;
@@ -520,7 +570,7 @@ public partial class UpdateHandler(
                 var availability = await db.Responses
                     .Include(r => r.User)
                     .Where(r => r.User.Username == (username ?? message.From!.Username) &&
-                                r.Date == DateOnly.FromDateTime(date))
+                                r.DateTime.HasValue && r.DateTime.Value.Date == date)
                     .Select(r => r.Availability)
                     .FirstOrDefaultAsync();
 
@@ -532,7 +582,7 @@ public partial class UpdateHandler(
                     _ => string.Empty
                 };
 
-                var format = date.ToString("dd.MM (ddd)", new CultureInfo("ru-RU"));
+                var format = date.ToString("dd.MM (ddd)", _russianCultureInfo);
                 inlineKeyboardButtons[w][d] = InlineKeyboardButton.WithCallbackData(
                     $"{emoji}{format}",
                     $"plan;{(int)(availability ?? Availability.Unknown)};{date:dd/MM/yyyy};{username ?? message.From!.Username}"
@@ -551,24 +601,28 @@ public partial class UpdateHandler(
         return inlineKeyboardButtons;
     }
 
-    async Task<TimeOnly?> UpdateResponseForDate(Telegram.Bot.Types.User from, Availability availability, DateOnly date,
+    async Task<DateTime?> UpdateResponseForDate(Telegram.Bot.Types.User from, Availability availability, DateTime date,
         string? args = null)
     {
-        var time = TimeOnly.MinValue;
+        var time = TimeSpan.Zero;
         if (args is not null)
         {
-            TimeOnly.TryParseExact(args, "HH:mm", CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out time);
+            var dt = DateTime.ParseExact(args, "HH:mm", _russianCultureInfo);
+            time = dt.TimeOfDay;
         }
 
+        var dateTime = date.Add(time);
+        var utcDateTime = ConvertToUtc(dateTime);
+
         var response = await db.Responses.Where(r =>
-                r.User.Username == from.Username && r.Date == date)
+                r.User.Username == from.Username &&
+                r.DateTime.HasValue && r.DateTime.Value.Date == utcDateTime.Date)
             .FirstOrDefaultAsync();
 
         if (response is not null)
         {
             response.Availability = availability;
-            response.Time = time == TimeOnly.MinValue ? null : time;
+            response.DateTime = utcDateTime;
         }
         else
         {
@@ -589,8 +643,7 @@ public partial class UpdateHandler(
             response = new Response
             {
                 Availability = availability,
-                Date = date,
-                Time = time == TimeOnly.MinValue ? null : time,
+                DateTime = utcDateTime,
                 User = user
             };
             await db.Responses.AddAsync(response);
@@ -598,29 +651,32 @@ public partial class UpdateHandler(
 
         await db.SaveChangesAsync();
 
-        var suitableTime = await CheckIfDateIsAvailable(date);
+        var suitableTime = await CheckIfDateIsAvailable(utcDateTime);
         return suitableTime;
     }
 
     InlineKeyboardButton[][] GenerateTimeKeyboard(
-        DateOnly date,
+        DateTime date,
         string? username = null)
     {
-        var start = new TimeOnly(9, 0);
-        var end = new TimeOnly(20, 30);
+        var start = new TimeSpan(6, 0, 0);
+        var end = new TimeSpan(17, 30, 0);
         var step = TimeSpan.FromMinutes(30);
 
         const int slotsPerRow = 4;
 
+        date = date.Add(start);
+
         var buttons = new List<InlineKeyboardButton[]>();
         var currentRow = new List<InlineKeyboardButton>();
 
-        for (var time = start; time <= end; time = time.Add(step))
+        for (var dt = date; dt.TimeOfDay <= end; dt = dt.Add(step))
         {
+            var localDt = ConvertToMoscow(dt);
             currentRow.Add(
                 InlineKeyboardButton.WithCallbackData(
-                    $"{time:HH:mm}",
-                    $"ptime;{date:dd/MM/yyyy};{time:HH:mm};{username}"
+                    localDt.ToString("HH:mm"),
+                    $"ptime;{dt:dd/MM/yyyyTHH:mm};{username}"
                 )
             );
 
@@ -643,7 +699,7 @@ public partial class UpdateHandler(
         return buttons.ToArray();
     }
 
-    async Task<TimeOnly?> CheckIfDateIsAvailable(DateOnly date)
+    async Task<DateTime?> CheckIfDateIsAvailable(DateTime date)
     {
         var activeUsersCount = await db.Users
             .Where(u => u.IsActive)
@@ -651,12 +707,12 @@ public partial class UpdateHandler(
 
         var responses = await db.Responses
             .Where(r =>
-                r.Date == date &&
+                r.DateTime.HasValue && r.DateTime.Value.Date == date.Date &&
                 r.User.IsActive)
             .Select(r => new
             {
                 r.Availability,
-                r.Time
+                r.DateTime
             })
             .ToListAsync();
 
@@ -664,35 +720,33 @@ public partial class UpdateHandler(
                 r.Availability is Availability.No or Availability.Unknown))
             return null;
 
-        if (responses.Any(r => r.Time == null))
+        if (responses.Any(r => r.DateTime == null || r.DateTime.Value.TimeOfDay == TimeSpan.Zero))
             return null;
 
         var commonTime = responses
-            .Max(r => r.Time!.Value);
+            .Max(r => ConvertToMoscow(r.DateTime!.Value));
 
         return commonTime;
     }
 
     async Task SavePlannedGame(DateTime dateTime, Message message)
     {
-        var now = DateTime.Now.ToLocalTime();
-        var date = DateOnly.FromDateTime(dateTime);
-        var time = TimeOnly.FromDateTime(dateTime);
+        var now = DateTime.UtcNow;
+        var dateTimeUtc = ConvertToUtc(dateTime);
 
-        await db.SavedGame.Where(sg => sg.Date <= DateOnly.FromDateTime(now)).ExecuteDeleteAsync();
+        await db.SavedGame.Where(sg => sg.DateTime <= now.Date).ExecuteDeleteAsync();
 
-        if (!await db.SavedGame.AnyAsync(sg => sg.Date == date && sg.Time == time))
+        if (!await db.SavedGame.AnyAsync(sg => sg.DateTime.Date == dateTimeUtc.Date))
         {
             await db.AddAsync(new SavedGame
             {
-                Date = date,
-                Time = time
+                DateTime = dateTimeUtc
             });
         }
 
         await db.SaveChangesAsync();
 
-        var timeUntilGame = dateTime - now;
+        var timeUntilGame = dateTimeUtc - DateTime.UtcNow;
         var activePlayerTags = await db.Users
             .Where(u => u.IsActive)
             .Select(u => $"@{u.Username}")
@@ -700,12 +754,12 @@ public partial class UpdateHandler(
 
         foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
         {
-            var executionTime = dateTime.Add(-timeSpan);
+            var executionTime = dateTimeUtc.Add(-timeSpan);
 
             var text = $"""
                         {string.Join(", ", activePlayerTags)}
 
-                        АХТУНГ! Игра через {timeSpan.Humanize(culture: new CultureInfo("ru-RU"), toWords: true)}
+                        АХТУНГ! Игра через {timeSpan.Humanize(culture: _russianCultureInfo, toWords: true)}
                         """;
 
             var schedulingResult = await ticker.AddAsync(new TimeTickerEntity
@@ -730,9 +784,9 @@ public partial class UpdateHandler(
 
         foreach (var game in db.SavedGame)
         {
-            var dateStr = game.Date.ToString("dd.MM.yyyy (ddd)", new CultureInfo("ru-RU"));
-            var timeStr = game.Time.ToString("HH:mm", new CultureInfo("ru-RU"));
-            sb.AppendLine($"- {dateStr} {timeStr}");
+            var gameDateTime = ConvertToMoscow(game.DateTime);
+            var dateStr = gameDateTime.ToString("dd.MM.yyyy (ddd) HH:mm", _russianCultureInfo);
+            sb.AppendLine($"- {dateStr}");
         }
 
         await bot.SendMessage(message.Chat.Id,

@@ -293,6 +293,16 @@ public partial class UpdateHandler(
                 await HandleSaveCommand(msg, args);
                 break;
             }
+            case "/saved":
+            {
+                await HandleSavedCommand(msg);
+                break;
+            }
+            case "/unsave":
+            {
+                await HandleUnsaveCommand(msg, args);
+                break;
+            }
         }
     }
 
@@ -310,6 +320,8 @@ public partial class UpdateHandler(
 
                 /get - Показать общий план и ближайшее пересечение
                 /save dd.mm.yyyy hh:mm - Установить время ближайшей игры
+                /saved - Показать список сохранённых игр
+                /unsave number - Отменить сохранённую игру
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
     }
@@ -541,6 +553,56 @@ public partial class UpdateHandler(
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
     }
 
+    private async Task HandleSavedCommand(Message msg)
+    {
+        var savedGames = await db.SavedGame
+            .Where(sg => sg.DateTime.Date >= DateTime.UtcNow)
+            .OrderBy(sg => sg.DateTime)
+            .ToListAsync();
+
+        var sb = new StringBuilder("Сохранённые игры:");
+        sb.AppendLine();
+        sb.AppendLine();
+
+        foreach (var game in savedGames.Select(sg => sg))
+        {
+            var gameDateTime = ConvertToMoscow(game.DateTime);
+            sb.AppendLine($"- [{game.Id}] {gameDateTime.ToString("dd.MM.yyyy (ddd) HH:mm", _russianCultureInfo)}");
+        }
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: sb.ToString(), parseMode: ParseMode.Html,
+            linkPreviewOptions: true);
+    }
+
+    private async Task HandleUnsaveCommand(Message msg, string args)
+    {
+        if (!int.TryParse(args, out var id))
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: """
+                      Не указан номер игры или указано не число.
+
+                      Пример использования:
+                      /unsave 0
+                      """
+            );
+        }
+
+        await db.SavedGame.Where(sg => sg.Id == id).ExecuteDeleteAsync();
+        
+        var jobIds = (await db.Set<TimeTickerEntity>()
+                .ToListAsync())
+            .Where(t => TickerHelper.ReadTickerRequest<SendReminderJobContext>(t.Request).SavedGameId == id)
+            .Select(t => t.Id).ToList();
+        
+        await ticker.DeleteBatchAsync(jobIds);
+        
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: "Удалена игра и все связанные с ней напоминания"
+        );
+    }
+
     private Task UnknownUpdateHandlerAsync(Update update)
     {
         LogUnknownUpdateTypeUpdatetype(logger, update.Type);
@@ -738,65 +800,75 @@ public partial class UpdateHandler(
 
         if (!await db.SavedGame.AnyAsync(sg => sg.DateTime.Date == dateTimeUtc.Date))
         {
-            await db.AddAsync(new SavedGame
+            var savedGame = new SavedGame
             {
                 DateTime = dateTimeUtc
-            });
-        }
+            };
+            await db.AddAsync(savedGame);
 
-        await db.SaveChangesAsync();
+            await db.SaveChangesAsync();
 
-        var timeUntilGame = dateTimeUtc - DateTime.UtcNow;
-        var activePlayerTags = await db.Users
-            .Where(u => u.IsActive)
-            .Select(u => $"@{u.Username}")
-            .ToListAsync();
+            var timeUntilGame = dateTimeUtc - DateTime.UtcNow;
+            var activePlayerTags = await db.Users
+                .Where(u => u.IsActive)
+                .Select(u => $"@{u.Username}")
+                .ToListAsync();
 
-        foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
-        {
-            var executionTime = dateTimeUtc.Add(-timeSpan);
-
-            var text = $"""
-                        {string.Join(", ", activePlayerTags)}
-
-                        АХТУНГ! Игра через {timeSpan.Humanize(culture: _russianCultureInfo, toWords: true)}
-                        """;
-
-            var schedulingResult = await ticker.AddAsync(new TimeTickerEntity
+            foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
             {
-                Function = "send_reminder",
-                ExecutionTime = executionTime,
-                Request = TickerHelper.CreateTickerRequest(new SendReminderJobContext
+                var executionTime = dateTimeUtc.Add(-timeSpan);
+
+                var text = $"""
+                            {string.Join(", ", activePlayerTags)}
+
+                            АХТУНГ! Игра через {timeSpan.Humanize(culture: _russianCultureInfo, toWords: true)}
+                            """;
+
+                var schedulingResult = await ticker.AddAsync(new TimeTickerEntity
                 {
-                    Message = text,
-                    ChatId = message.Chat.Id,
-                    ThreadId = message.MessageThreadId
-                }),
-            });
+                    Function = "send_reminder",
+                    ExecutionTime = executionTime,
+                    Request = TickerHelper.CreateTickerRequest(new SendReminderJobContext
+                    {
+                        Message = text,
+                        ChatId = message.Chat.Id,
+                        ThreadId = message.MessageThreadId,
+                        SavedGameId = savedGame.Id
+                    }),
+                });
 
-            if (schedulingResult.IsSucceeded)
-            {
-                LogReminderScheduledTo(logger, executionTime);
+                if (schedulingResult.IsSucceeded)
+                {
+                    LogReminderScheduledTo(logger, executionTime);
+                }
             }
+
+            var sb = new StringBuilder();
+
+            foreach (var game in db.SavedGame)
+            {
+                var gameDateTime = ConvertToMoscow(game.DateTime);
+                var dateStr = gameDateTime.ToString("dd.MM.yyyy (ddd) HH:mm", _russianCultureInfo);
+                sb.AppendLine($"- {dateStr}");
+            }
+
+            await bot.SendMessage(message.Chat.Id,
+                messageThreadId: message.MessageThreadId,
+                text: $"""
+                       Игра сохранена! Запланированные игры:
+
+                       {sb}
+                       """,
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new ReplyKeyboardRemove());
         }
-
-        var sb = new StringBuilder();
-
-        foreach (var game in db.SavedGame)
+        else
         {
-            var gameDateTime = ConvertToMoscow(game.DateTime);
-            var dateStr = gameDateTime.ToString("dd.MM.yyyy (ddd) HH:mm", _russianCultureInfo);
-            sb.AppendLine($"- {dateStr}");
+            await bot.SendMessage(message.Chat.Id,
+                messageThreadId: message.MessageThreadId,
+                text: "В этот день уже есть игра!",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new ReplyKeyboardRemove());
         }
-
-        await bot.SendMessage(message.Chat.Id,
-            messageThreadId: message.MessageThreadId,
-            text: $"""
-                   Игра сохранена! Запланированные игры:
-
-                   {sb}
-                   """,
-            parseMode: ParseMode.Html, linkPreviewOptions: true,
-            replyMarkup: new ReplyKeyboardRemove());
     }
 }

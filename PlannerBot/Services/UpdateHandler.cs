@@ -288,9 +288,9 @@ public partial class UpdateHandler(
                 await HandlePlanCommand(msg);
                 break;
             }
-            case "/set":
+            case "/save":
             {
-                await HandleSetCommand(msg, args);
+                await HandleSaveCommand(msg, args);
                 break;
             }
         }
@@ -309,7 +309,7 @@ public partial class UpdateHandler(
                 /unpause - Восстановить участие в играх
 
                 /get - Показать общий план и ближайшее пересечение
-                /set dd.mm.yyyy hh:mm - Установить время ближайшей игры
+                /save dd.mm.yyyy hh:mm - Установить время ближайшей игры
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
     }
@@ -509,7 +509,7 @@ public partial class UpdateHandler(
             replyMarkup: calendar);
     }
 
-    private async Task HandleSetCommand(Message msg, string args)
+    private async Task HandleSaveCommand(Message msg, string args)
     {
         if (args == string.Empty)
         {
@@ -518,7 +518,7 @@ public partial class UpdateHandler(
                       Пропущены аргументы с датой/временем.
 
                       Пример использования:
-                      /set 28.01.2026 18:30
+                      /save 28.01.2026 18:30
                       """, parseMode: ParseMode.Html,
                 linkPreviewOptions: true);
         }
@@ -531,7 +531,7 @@ public partial class UpdateHandler(
                       Невалидный формат даты/времени.
 
                       Пример использования:
-                      /set 28.01.2026 18:30
+                      /save 28.01.2026 18:30
                       """, parseMode: ParseMode.Html,
                 linkPreviewOptions: true);
             return;

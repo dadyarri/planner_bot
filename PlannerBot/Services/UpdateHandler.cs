@@ -400,29 +400,32 @@ public partial class UpdateHandler(
 
         var usernames = users.Select(u => u.Username).ToList();
 
-        var now = DateTime.UtcNow;
-        var today = now.Date;
-        var end = now.AddDays(6).Date;
+        var moscowNow = GetMoscowDateTime();
+        var startMoscowDate = moscowNow.Date;
+        var endMoscowDate = startMoscowDate.AddDays(6);
+
+        var startUtcDate = ConvertToUtc(DateTime.SpecifyKind(startMoscowDate, DateTimeKind.Unspecified));
+        var endUtcDate = ConvertToUtc(DateTime.SpecifyKind(endMoscowDate.AddDays(1), DateTimeKind.Unspecified));
 
         var sb = new StringBuilder();
 
+        var allResponses = await db.Responses
+            .Where(r => r.DateTime.HasValue && r.User.IsActive &&
+                        r.DateTime.Value >= startUtcDate && r.DateTime.Value < endUtcDate)
+            .ToListAsync();
+
         for (var i = 0; i < 7; i++)
         {
-            var date = now.AddDays(i).Date;
-            sb.AppendLine($"<b>{date.ToString("dd MMM (ddd)", _russianCultureInfo)}</b>");
+            var moscowDate = startMoscowDate.AddDays(i);
+
+            sb.AppendLine($"<b>{moscowDate.ToString("dd MMM (ddd)", _russianCultureInfo)}</b>");
             sb.AppendLine();
 
             foreach (var user in users)
             {
-                var responseDateTime = await db.Responses
-                    .Where(r => r.DateTime.HasValue && r.DateTime.Value.Date == date &&
-                                r.User.Username == user.Username)
-                    .Select(r => r.DateTime)
-                    .FirstOrDefaultAsync();
-
-                var response = await db.Responses
-                    .Where(r => r.DateTime == responseDateTime && r.User.Username == user.Username)
-                    .FirstOrDefaultAsync();
+                var response = allResponses
+                    .FirstOrDefault(r => r.User.Username == user.Username &&
+                                         ConvertToMoscow(r.DateTime!.Value).Date == moscowDate);
 
                 var time = string.Empty;
 
@@ -443,8 +446,8 @@ public partial class UpdateHandler(
         var nearestFittingDate = await db.Responses
             .Include(v => v.User)
             .Where(v => v.DateTime.HasValue &&
-                        v.DateTime.Value.Date >= today &&
-                        v.DateTime.Value.Date <= end &&
+                        v.DateTime.Value >= startUtcDate &&
+                        v.DateTime.Value < endUtcDate &&
                         usernames.Contains(v.User.Username) && v.User.IsActive)
             .GroupBy(v => v.DateTime!.Value.Date)
             .Where(g =>
@@ -456,7 +459,9 @@ public partial class UpdateHandler(
 
         var availableTime = await CheckIfDateIsAvailable(nearestFittingDate);
 
-        var formattedDate = nearestFittingDate.ToString("dd MMM (ddd)", _russianCultureInfo);
+        var formattedDate = nearestFittingDate != default
+            ? ConvertToMoscow(nearestFittingDate).ToString("dd MMM (ddd)", _russianCultureInfo)
+            : string.Empty;
         var formattedTime = availableTime.HasValue ? availableTime.Value.ToString("hh:mm") : string.Empty;
         var format = nearestFittingDate != default
             ? $"{formattedDate} {formattedTime}"
@@ -590,14 +595,14 @@ public partial class UpdateHandler(
         }
 
         await db.SavedGame.Where(sg => sg.Id == id).ExecuteDeleteAsync();
-        
+
         var jobIds = (await db.Set<TimeTickerEntity>()
                 .ToListAsync())
             .Where(t => TickerHelper.ReadTickerRequest<SendReminderJobContext>(t.Request).SavedGameId == id)
             .Select(t => t.Id).ToList();
-        
+
         await ticker.DeleteBatchAsync(jobIds);
-        
+
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: "Удалена игра и все связанные с ней напоминания"
         );

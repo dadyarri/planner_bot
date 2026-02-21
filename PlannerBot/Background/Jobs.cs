@@ -47,4 +47,38 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
         await bot.SendMessage(context.Request.ChatId, messageThreadId: context.Request.ThreadId,
             text: message, cancellationToken: cancellationToken);
     }
+
+    [TickerFunction("send_weekly_voting_reminder")]
+    public async Task SendWeeklyVotingReminder(TickerFunctionContext<WeeklyVotingReminderJobContext> context,
+        CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Sending weekly voting reminder");
+
+        var activePlayers = await db.Users
+            .Where(u => u.IsActive)
+            .Select(u => u.Username)
+            .ToListAsync(cancellationToken);
+
+        if (activePlayers.Count == 0)
+        {
+            logger.LogWarning("No active players found for weekly reminder");
+            return;
+        }
+
+        var activePlayerTags = activePlayers.Select(u => $"@{u}").ToList();
+
+        var message = $"""
+                       {string.Join(", ", activePlayerTags)}
+
+                       Приветствуем вас, доблестные авантюристы! 🧙‍♂️⚔️
+
+                       Настала пора проголосовать за свободные дни на предстоящей неделе. 
+                       Используйте команду /plan чтобы указать, когда вы будете готовы к приключениям!
+
+                       Да хранит вас удача! 🍀
+                       """;
+
+        await bot.SendMessage(context.Request.ChatId, messageThreadId: context.Request.ThreadId,
+            text: message, cancellationToken: cancellationToken);
+    }
 }

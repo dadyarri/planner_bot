@@ -1,11 +1,14 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using PlannerBot.Background;
 using PlannerBot.Data;
 using PlannerBot.Services;
 using Telegram.Bot;
 using TickerQ.DependencyInjection;
 using TickerQ.EntityFrameworkCore.Customizer;
 using TickerQ.EntityFrameworkCore.DependencyInjection;
+using TickerQ.Utilities;
 using TickerQ.Utilities.Entities;
+using TickerQ.Utilities.Interfaces.Managers;
 
 var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL") ??
                   throw new Exception("DATABASE_URL environment variable not set");
@@ -27,6 +30,7 @@ builder.Services.AddScoped<TimeZoneUtilities>();
 builder.Services.AddScoped<KeyboardGenerator>();
 builder.Services.AddScoped<AvailabilityManager>();
 builder.Services.AddScoped<CommandHandler>();
+builder.Services.AddScoped<Jobs>();
 builder.Services.AddHostedService<PollingService>();
 builder.Services.AddNpgsql<AppDbContext>(databaseUrl);
 builder.Services.AddTickerQ(options =>

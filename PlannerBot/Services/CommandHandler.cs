@@ -26,6 +26,7 @@ public class CommandHandler(
     AvailabilityManager availabilityManager,
     TimeZoneUtilities timeZoneUtilities,
     ITimeTickerManager<TimeTickerEntity> ticker,
+    ICronTickerManager<CronTickerEntity> cronTicker,
     ILogger<UpdateHandler> logger)
 {
     /// <summary>
@@ -68,6 +69,9 @@ public class CommandHandler(
             case "/unsave":
                 await HandleUnsaveCommand(msg, args);
                 break;
+            case "/weekly":
+                await HandleWeeklyCommand(msg);
+                break;
         }
     }
 
@@ -103,7 +107,7 @@ public class CommandHandler(
         }
 
         var suitableTime =
-            await availabilityManager.UpdateResponseForDate(msg.From!, Availability.Yes, 
+            await availabilityManager.UpdateResponseForDate(msg.From!, Availability.Yes,
                 timeZoneUtilities.GetMoscowDate(), args);
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["❤"]);
 
@@ -123,7 +127,7 @@ public class CommandHandler(
 
     private async Task HandleNoCommand(Message msg)
     {
-        await availabilityManager.UpdateResponseForDate(msg.From!, Availability.No, 
+        await availabilityManager.UpdateResponseForDate(msg.From!, Availability.No,
             timeZoneUtilities.GetMoscowDate());
 
         var now = DateTime.UtcNow;
@@ -154,7 +158,7 @@ public class CommandHandler(
 
     private async Task HandleProbablyCommand(Message msg)
     {
-        await availabilityManager.UpdateResponseForDate(msg.From!, Availability.Probably, 
+        await availabilityManager.UpdateResponseForDate(msg.From!, Availability.Probably,
             timeZoneUtilities.GetMoscowDate());
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["😐"]);
     }
@@ -171,8 +175,10 @@ public class CommandHandler(
         var startMoscowDate = moscowNow.Date;
         var endMoscowDate = startMoscowDate.AddDays(6);
 
-        var startUtcDate = timeZoneUtilities.ConvertToUtc(DateTime.SpecifyKind(startMoscowDate, DateTimeKind.Unspecified));
-        var endUtcDate = timeZoneUtilities.ConvertToUtc(DateTime.SpecifyKind(endMoscowDate.AddDays(1), DateTimeKind.Unspecified));
+        var startUtcDate =
+            timeZoneUtilities.ConvertToUtc(DateTime.SpecifyKind(startMoscowDate, DateTimeKind.Unspecified));
+        var endUtcDate =
+            timeZoneUtilities.ConvertToUtc(DateTime.SpecifyKind(endMoscowDate.AddDays(1), DateTimeKind.Unspecified));
 
         var sb = new StringBuilder();
         var culture = timeZoneUtilities.GetRussianCultureInfo();
@@ -366,7 +372,7 @@ public class CommandHandler(
         }
 
         var deletedCount = await db.SavedGame.Where(sg => sg.Id == id).ExecuteDeleteAsync();
-        
+
         if (deletedCount == 0)
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
@@ -385,5 +391,46 @@ public class CommandHandler(
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: "Удалена игра и все связанные с ней напоминания"
         );
+    }
+
+    private async Task HandleWeeklyCommand(Message msg)
+    {
+        const string votingReminderFunctionName = "send_weekly_voting_reminder";
+        const string votingReminderCron = "0 15 ? * SAT"; // Saturday 3pm UTC
+
+        // Check if voting reminder job already exists
+        var existingJobs = await db.Set<CronTickerEntity>()
+            .Where(c => c.Function == votingReminderFunctionName)
+            .ToListAsync();
+
+        if (existingJobs.Count > 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "Еженедельное напоминание уже запланировано!");
+            return;
+        }
+
+        try
+        {
+            await cronTicker.AddAsync(new CronTickerEntity
+            {
+                Function = votingReminderFunctionName,
+                Expression = votingReminderCron,
+                Request = TickerHelper.CreateTickerRequest(new WeeklyVotingReminderJobContext
+                {
+                    ChatId = msg.Chat.Id,
+                    ThreadId = msg.MessageThreadId
+                })
+            });
+
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "✅ Еженедельное напоминание запланировано на каждую субботу в 18:00!");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to schedule weekly voting reminder");
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "❌ Ошибка при планировании еженедельного напоминания");
+        }
     }
 }

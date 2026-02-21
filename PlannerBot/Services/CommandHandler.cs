@@ -406,7 +406,7 @@ public class CommandHandler(
     private async Task HandleWeeklyCommand(Message msg)
     {
         const string votingReminderFunctionName = "send_weekly_voting_reminder";
-        const string votingReminderCron = "0 15 ? * SAT"; // Saturday 3pm UTC
+        const string votingReminderCron = "0 0 21 * * 6"; // Every Saturday 9pm UTC
 
         // Check if voting reminder job already exists
         var existingJobs = await db.Set<CronTickerEntity>()
@@ -422,7 +422,7 @@ public class CommandHandler(
 
         try
         {
-            await cronTicker.AddAsync(new CronTickerEntity
+            var r = await cronTicker.AddAsync(new CronTickerEntity
             {
                 Function = votingReminderFunctionName,
                 Expression = votingReminderCron,

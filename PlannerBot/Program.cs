@@ -23,6 +23,10 @@ builder.Services.AddHttpClient("telegram_bot_client")
 
 builder.Services.AddScoped<UpdateHandler>();
 builder.Services.AddScoped<ReceiverService>();
+builder.Services.AddScoped<TimeZoneUtilities>();
+builder.Services.AddScoped<KeyboardGenerator>();
+builder.Services.AddScoped<AvailabilityManager>();
+builder.Services.AddScoped<CommandHandler>();
 builder.Services.AddHostedService<PollingService>();
 builder.Services.AddNpgsql<AppDbContext>(databaseUrl);
 builder.Services.AddTickerQ(options =>

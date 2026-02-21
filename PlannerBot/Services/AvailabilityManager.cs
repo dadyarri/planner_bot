@@ -141,6 +141,48 @@ public class AvailabilityManager
     }
 
     /// <summary>
+    /// Sets availability to "No" (unavailable) for all unmarked days in the plan range (8 days).
+    /// This is called when the user finishes planning their weekly availability.
+    /// </summary>
+    public async Task SetUnavailableForUnmarkedDays(string? username)
+    {
+        var now = DateTime.UtcNow;
+        const int planRangeDays = 8;
+
+        for (var i = 0; i < planRangeDays; i++)
+        {
+            var date = now.AddDays(i).Date;
+
+            var existingResponse = await _db.Responses
+                .Include(r => r.User)
+                .Where(r => r.User.Username == username &&
+                            r.DateTime.HasValue && r.DateTime.Value.Date == date)
+                .FirstOrDefaultAsync();
+
+            // Only set to unavailable if user hasn't marked this day
+            if (existingResponse is null)
+            {
+                var user = await _db.Users.Where(u => u.Username == username)
+                    .FirstOrDefaultAsync();
+
+                if (user is not null)
+                {
+                    // Create a response with No availability for this date
+                    var response = new Response
+                    {
+                        Availability = Availability.No,
+                        DateTime = date,
+                        User = user
+                    };
+                    await _db.Responses.AddAsync(response);
+                }
+            }
+        }
+
+        await _db.SaveChangesAsync();
+    }
+
+    /// <summary>
     /// Saves a game and schedules reminders at specified intervals before the game.
     /// </summary>
     public async Task SavePlannedGame(DateTime dateTime, Message message, ILogger<UpdateHandler> logger)

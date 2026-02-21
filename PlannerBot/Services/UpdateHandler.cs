@@ -181,6 +181,7 @@ public partial class UpdateHandler(
             case "delete":
             {
                 await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                await availabilityManager.SetUnavailableForUnmarkedDays(callbackQuery.From.Username);
 
                 var now = DateTime.UtcNow;
                 for (var i = 0; i < 8; i++)

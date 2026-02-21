@@ -78,38 +78,51 @@ public partial class UpdateHandler(
             case "plan":
             {
                 LogReceivedPlanCommand(logger);
-                var availability = int.Parse(split[1]);
-                var data = new PlanButtonCallback
-                {
-                    Availability = (Availability)availability,
-                    Date = DateTime.ParseExact(split[2], "dd/MM/yyyy", CultureInfo.InvariantCulture),
-                    Username = split[3],
-                };
-                var newAvailability = (Availability)((int)(data.Availability + 1) % 4);
+                var date = DateTime.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
+                var username = split[2];
 
-                if (data.Username != callbackQuery.From.Username)
+                if (username != callbackQuery.From.Username)
                 {
-                    LogWrongUserUsedPlanCommand(logger, data.Username, callbackQuery.From.Username!);
+                    LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
                     await bot.AnswerCallbackQuery(callbackQuery.Id, "Не твоя кнопка!");
                     return;
                 }
 
-                var date = DateTime.SpecifyKind(data.Date.Date, DateTimeKind.Utc);
-                await availabilityManager.UpdateResponseForDate(callbackQuery.From, newAvailability, date);
+                await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
+                    new InlineKeyboardMarkup(keyboardGenerator.GenerateStatusKeyboard(date, username)));
 
-                if (newAvailability == Availability.Yes)
+                break;
+            }
+            case "pstatus":
+            {
+                LogReceivedPlanCommand(logger);
+                var availability = int.Parse(split[1]);
+                var date = DateTime.ParseExact(split[2], "dd/MM/yyyy", CultureInfo.InvariantCulture);
+                var username = split[3];
+
+                if (username != callbackQuery.From.Username)
+                {
+                    LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
+                    await bot.AnswerCallbackQuery(callbackQuery.Id, "Не твоя кнопка!");
+                    return;
+                }
+
+                var utcDate = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
+                var selectedAvailability = (Availability)availability;
+
+                if (selectedAvailability == Availability.Yes)
                 {
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                     await bot.SendMessage(callbackQuery.Message!.Chat.Id,
                         messageThreadId: callbackQuery.Message!.MessageThreadId,
                         text: "Выбери время, начиная с которого ты свободен",
-                        replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(date, data.Username)));
+                        replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, username)));
                 }
                 else
                 {
-                    await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id,
-                        callbackQuery.Message.Id,
-                        new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(data.Username)));
+                    await availabilityManager.UpdateResponseForDate(callbackQuery.From, selectedAvailability, utcDate);
+                    await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
+                        new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
                 }
 
                 break;
@@ -133,14 +146,7 @@ public partial class UpdateHandler(
 
                 var utcDateTime = timeZoneUtilities.ConvertToUtc(dateTime);
 
-                var response = await db.Responses
-                    .Include(r => r.User)
-                    .Where(r => r.User.Username == username &&
-                                r.DateTime.HasValue && r.DateTime.Value.Date == utcDateTime.Date)
-                    .FirstOrDefaultAsync();
-
-                response?.DateTime = utcDateTime;
-                await db.SaveChangesAsync();
+                await availabilityManager.UpdateResponseForDate(callbackQuery.From, Availability.Yes, utcDateTime);
 
                 await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                 await bot.SendMessage(callbackQuery.Message!.Chat.Id,

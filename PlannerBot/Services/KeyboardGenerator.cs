@@ -1,6 +1,7 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
-using PlannerBot.Data;
 using Telegram.Bot.Types.ReplyMarkups;
+using PlannerBot.Data;
 
 namespace PlannerBot.Services;
 
@@ -52,7 +53,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
                 var format = date.ToString("dd.MM (ddd)", culture);
                 inlineKeyboardButtons[w][d] = InlineKeyboardButton.WithCallbackData(
                     $"{emoji}{format}",
-                    $"plan;{(int)(availability ?? Availability.Unknown)};{date:dd/MM/yyyy};{username}"
+                    $"plan;{date:dd/MM/yyyy};{username}"
                 );
             }
         }
@@ -66,6 +67,26 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         ];
 
         return inlineKeyboardButtons;
+    }
+
+    /// <summary>
+    /// Generates a keyboard for selecting availability status (Yes/No/Probably).
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateStatusKeyboard(
+        DateTime date,
+        string? username = null)
+    {
+        return
+        [
+            [
+                InlineKeyboardButton.WithCallbackData("✅", $"pstatus;{(int)Availability.Yes};{date:dd/MM/yyyy};{username}"),
+                InlineKeyboardButton.WithCallbackData("❌", $"pstatus;{(int)Availability.No};{date:dd/MM/yyyy};{username}"),
+                InlineKeyboardButton.WithCallbackData("❓", $"pstatus;{(int)Availability.Probably};{date:dd/MM/yyyy};{username}"),
+            ],
+            [
+                InlineKeyboardButton.WithCallbackData("Назад", $"pback;{username}")
+            ]
+        ];
     }
 
     /// <summary>

@@ -1,5 +1,4 @@
 using System.Globalization;
-using Microsoft.EntityFrameworkCore;
 using PlannerBot.Data;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
@@ -17,7 +16,6 @@ namespace PlannerBot.Services;
 public partial class UpdateHandler(
     ITelegramBotClient bot,
     ILogger<UpdateHandler> logger,
-    AppDbContext db,
     TimeZoneUtilities timeZoneUtilities,
     KeyboardGenerator keyboardGenerator,
     AvailabilityManager availabilityManager,
@@ -39,7 +37,7 @@ public partial class UpdateHandler(
     public async Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source,
         CancellationToken cancellationToken)
     {
-        LogHandleerrorException(logger, exception);
+        LogHandleerrorException(logger);
         // Cooldown in case of network connection error
         if (exception is RequestException)
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);

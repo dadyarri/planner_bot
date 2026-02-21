@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using Humanizer;
 using Microsoft.EntityFrameworkCore;
 using PlannerBot.Background;
 using PlannerBot.Data;
@@ -151,7 +150,7 @@ public class AvailabilityManager
 
         await _db.SavedGame.Where(sg => sg.DateTime <= now.Date).ExecuteDeleteAsync();
 
-        if (!await _db.SavedGame.AnyAsync(sg => sg.DateTime.Date == dateTimeUtc.Date))
+        if (!await _db.SavedGame.AnyAsync(sg => sg.DateTime <= dateTimeUtc))
         {
             var savedGame = new SavedGame
             {
@@ -162,20 +161,11 @@ public class AvailabilityManager
 
             var timeUntilGame = dateTimeUtc - DateTime.UtcNow;
             var culture = _timeZoneUtilities.GetRussianCultureInfo();
-            var activePlayerTags = await _db.Users
-                .Where(u => u.IsActive)
-                .Select(u => $"@{u.Username}")
-                .ToListAsync();
 
             foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
             {
                 var executionTime = dateTimeUtc.Add(-timeSpan);
-
-                var text = $"""
-                            {string.Join(", ", activePlayerTags)}
-
-                            АХТУНГ! Игра через {timeSpan.Humanize(culture: culture, toWords: true)}
-                            """;
+                var reminderIntervalMinutes = (int)timeSpan.TotalMinutes;
 
                 var schedulingResult = await _ticker.AddAsync(new TimeTickerEntity
                 {
@@ -183,7 +173,7 @@ public class AvailabilityManager
                     ExecutionTime = executionTime,
                     Request = TickerHelper.CreateTickerRequest(new SendReminderJobContext
                     {
-                        Message = text,
+                        ReminderIntervalMinutes = reminderIntervalMinutes,
                         ChatId = message.Chat.Id,
                         ThreadId = message.MessageThreadId,
                         SavedGameId = savedGame.Id

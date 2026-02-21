@@ -330,7 +330,7 @@ public class CommandHandler(
     private async Task HandleSavedCommand(Message msg)
     {
         var savedGames = await db.SavedGame
-            .Where(sg => sg.DateTime.Date >= DateTime.UtcNow)
+            .Where(sg => sg.DateTime >= DateTime.UtcNow)
             .OrderBy(sg => sg.DateTime)
             .ToListAsync();
 

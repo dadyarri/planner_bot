@@ -198,7 +198,7 @@ public class AvailabilityManager
             await _bot.SendMessage(message.Chat.Id,
                 messageThreadId: message.MessageThreadId,
                 text: $"""
-                       Игра сохранена! Запланированные игры:
+                       🏰 Битва записана в летописи! Грядущие битвы:
 
                        {sb}
                        """,
@@ -209,7 +209,7 @@ public class AvailabilityManager
         {
             await _bot.SendMessage(message.Chat.Id,
                 messageThreadId: message.MessageThreadId,
-                text: "В этот день уже есть игра!",
+                text: "⚔️ На этот день битва уже назначена!",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,
                 replyMarkup: new ReplyKeyboardRemove());
         }

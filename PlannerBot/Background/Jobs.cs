@@ -41,7 +41,7 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
         var message = $"""
                        {string.Join(", ", availablePlayerTags)}
 
-                       АХТУНГ! Игра через {interval.Humanize(culture: RussianCultureInfo, toWords: true)}
+                       🚨 🚨 🚨 Герольды трубят — битва начнётся через {interval.Humanize(culture: RussianCultureInfo, toWords: true)}! 🚨 🚨 🚨
                        """;
 
         await bot.SendMessage(context.Request.ChatId, messageThreadId: context.Request.ThreadId,
@@ -70,12 +70,12 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
         var message = $"""
                        {string.Join(", ", activePlayerTags)}
 
-                       Приветствуем вас, доблестные авантюристы! 🧙‍♂️⚔️
+                       ⚔️ Приветствуем героев братства!
 
-                       Настала пора проголосовать за свободные дни на предстоящей неделе. 
-                       Используйте команду /plan чтобы указать, когда вы будете готовы к приключениям!
+                       Пришла пора узреть грядущие дни - примените заклинание предсказания /plan,
+                       чтобы объявить о своём присоединении к битвам!
 
-                       Да хранит вас удача! 🍀
+                       🍀 Пусть боги будут благосклонны к вам! 🍀
                        """;
 
         await bot.SendMessage(context.Request.ChatId, messageThreadId: context.Request.ThreadId,

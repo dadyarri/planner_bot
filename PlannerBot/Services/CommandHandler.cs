@@ -78,19 +78,20 @@ public class CommandHandler(
     private async Task SendUsage(Message msg)
     {
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId, text: """
-                <b><u>Меню бота</u></b>:
-                /yes hh:mm - Указать, что могу играть сегодня (с указанием времени)
-                /no - Указать, что не могу играть сегодня
-                /prob - Указать, что возможно могу сегодня
-                /plan - Запланировать на 8 дней
+                <b><u>⚔️ ГРИМУАР ЗАКЛИНАНИЙ ⚔️</u></b>:
 
-                /pause - Приостановить участие в играх
-                /unpause - Восстановить участие в играх
+                /yes hh:mm - Клянусь участвовать в битве сегодня (укажи час)
+                /no - Боги повелели мне остаться в таверне сегодня
+                /prob - Судьба туманна, я затрудняюсь с ответом
+                /plan - Предсказать свободные дни на неделю вперёд
 
-                /get - Показать общий план и ближайшее пересечение
-                /save dd.mm.yyyy hh:mm - Установить время ближайшей игры
-                /saved - Показать список сохранённых игр
-                /unsave number - Отменить сохранённую игру
+                /pause - Удалиться на время в монастырь
+                /unpause - Вернуться из отшельничества
+
+                /get - Узреть расписание братства и грядущий поход
+                /save dd.mm.yyyy hh:mm - Начертать время великой битвы
+                /saved - Развернуть свиток начертанных битв
+                /unsave number - Стереть запись о битве
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
     }
@@ -100,7 +101,7 @@ public class CommandHandler(
         if (string.IsNullOrEmpty(args))
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "Укажи время, начиная с которого ты свободен (любое, кроме 00:00)",
+                text: "🕐 Назови час присоединения к битве (только не полночь, та hora проклята)",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,
                 replyMarkup: new ReplyKeyboardRemove());
             return;
@@ -115,10 +116,10 @@ public class CommandHandler(
         {
             var today = timeZoneUtilities.GetMoscowDate().Add(suitableTime.Value.TimeOfDay);
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: $"Ура! Сегодня все могут! Удобное время: <b>{today:HH:mm}</b>",
+                text: $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{today:HH:mm}</b>",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,
                 replyMarkup: new InlineKeyboardMarkup(
-                    InlineKeyboardButton.WithCallbackData("Сохранить",
+                    InlineKeyboardButton.WithCallbackData("📖 Начертать в летописи",
                         $"save;{today:dd/MM/yyyy;HH:mm}")
                 )
             );
@@ -148,7 +149,7 @@ public class CommandHandler(
         if (savedGamesForToday.Count != 0)
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "Сегодняшняя игра была отменена",
+                text: "⚰️ Битва отменена - боги нынче переменчивы",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,
                 replyMarkup: new ReplyKeyboardRemove());
         }
@@ -266,6 +267,10 @@ public class CommandHandler(
 
         user.IsActive = false;
         await db.SaveChangesAsync();
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: $"@{user.Username} решил уйти в монастырь. Пусть же боги будут к нему благосклонны!",
+            parseMode: ParseMode.Html, linkPreviewOptions: true,
+            replyMarkup: new ReplyKeyboardRemove());
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["😢"]);
     }
 
@@ -287,6 +292,11 @@ public class CommandHandler(
 
         user.IsActive = true;
         await db.SaveChangesAsync();
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: $"Поприветствуем @{user.Username}, вернувшегося из отшельничества!",
+            parseMode: ParseMode.Html, linkPreviewOptions: true,
+            replyMarkup: new ReplyKeyboardRemove());
+
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["🎉"]);
     }
 
@@ -295,7 +305,7 @@ public class CommandHandler(
         var calendar = await keyboardGenerator.GeneratePlanKeyboard(msg.From!.Username);
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-            text: "Здесь можно настроить свободные дни в ближайшее время:", parseMode: ParseMode.Html,
+            text: "🗓️ Начертай свой путь на грядущие луны:", parseMode: ParseMode.Html,
             linkPreviewOptions: true,
             replyMarkup: new InlineKeyboardMarkup(calendar));
     }
@@ -306,9 +316,9 @@ public class CommandHandler(
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: """
-                      Пропущены аргументы с датой/временем.
+                      ⚠️ Ты забыл указать дату и час битвы!
 
-                      Пример использования:
+                      Используй заклинание так:
                       /save 28.01.2026 18:30
                       """, parseMode: ParseMode.Html,
                 linkPreviewOptions: true);
@@ -320,9 +330,9 @@ public class CommandHandler(
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: """
-                      Невалидный формат даты/времени.
+                      💫 Руны не поддаются прочтению!
 
-                      Пример использования:
+                      Используй заклинание так:
                       /save 28.01.2026 18:30
                       """, parseMode: ParseMode.Html,
                 linkPreviewOptions: true);
@@ -340,7 +350,7 @@ public class CommandHandler(
             .OrderBy(sg => sg.DateTime)
             .ToListAsync();
 
-        var sb = new StringBuilder("Сохранённые игры:");
+        var sb = new StringBuilder("📜 Летопись битв грядущих:");
         sb.AppendLine();
         sb.AppendLine();
 
@@ -362,9 +372,9 @@ public class CommandHandler(
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: """
-                      Не указан номер игры или указано не число.
+                      ❌ Номер битвы не найден или написан неправильно.
 
-                      Пример использования:
+                      Используй заклинание так:
                       /unsave 0
                       """
             );
@@ -376,7 +386,7 @@ public class CommandHandler(
         if (deletedCount == 0)
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: $"Игра с номером {id} не найдена"
+                text: $"🔍 В летописях не найдена битва №{id}"
             );
             return;
         }
@@ -389,7 +399,7 @@ public class CommandHandler(
         await ticker.DeleteBatchAsync(jobIds);
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-            text: "Удалена игра и все связанные с ней напоминания"
+            text: "🗡️ Битва вычеркнута из летописи"
         );
     }
 
@@ -406,7 +416,7 @@ public class CommandHandler(
         if (existingJobs.Count > 0)
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "Еженедельное напоминание уже запланировано!");
+                text: "🔔 Глас уже вещает каждую седмицу!");
             return;
         }
 
@@ -424,13 +434,13 @@ public class CommandHandler(
             });
 
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "✅ Еженедельное напоминание запланировано на каждую субботу в 18:00!");
+                text: "✅ Глас будет вещать каждый день Сатурна в час ужина!");
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to schedule weekly voting reminder");
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "❌ Ошибка при планировании еженедельного напоминания");
+                text: "❌ Чёрная магия помешала - глас не смог явиться на зов");
         }
     }
 }

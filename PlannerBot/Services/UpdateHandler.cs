@@ -82,7 +82,7 @@ public partial class UpdateHandler(
                 if (username != callbackQuery.From.Username)
                 {
                     LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
-                    await bot.AnswerCallbackQuery(callbackQuery.Id, "Не твоя кнопка!");
+                    await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
                     return;
                 }
 
@@ -101,7 +101,7 @@ public partial class UpdateHandler(
                 if (username != callbackQuery.From.Username)
                 {
                     LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
-                    await bot.AnswerCallbackQuery(callbackQuery.Id, "Не твоя кнопка!");
+                    await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
                     return;
                 }
 
@@ -113,7 +113,7 @@ public partial class UpdateHandler(
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                     await bot.SendMessage(callbackQuery.Message!.Chat.Id,
                         messageThreadId: callbackQuery.Message!.MessageThreadId,
-                        text: "Выбери время, начиная с которого ты свободен",
+                        text: "🕐 Назови час присоединения к грядущей битве",
                         replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, username)));
                 }
                 else
@@ -138,7 +138,7 @@ public partial class UpdateHandler(
                 if (username != callbackQuery.From.Username)
                 {
                     LogWrongUserUsedPtimeButtonDataCq(logger, username, callbackQuery.From.Username!);
-                    await bot.AnswerCallbackQuery(callbackQuery.Id, "Не твоя кнопка!");
+                    await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
                     return;
                 }
 
@@ -149,7 +149,7 @@ public partial class UpdateHandler(
                 await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                 await bot.SendMessage(callbackQuery.Message!.Chat.Id,
                     messageThreadId: callbackQuery.Message!.MessageThreadId,
-                    text: "Здесь можно настроить свободные дни в ближайшее время:",
+                    text: "🗓️ Примени заклинание предсказания - объяви о свободных днях:",
                     replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
 
                 break;
@@ -161,7 +161,7 @@ public partial class UpdateHandler(
 
                 if (username != callbackQuery.From.Username)
                 {
-                    await bot.AnswerCallbackQuery(callbackQuery.Id, "Не твоя кнопка!");
+                    await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
                     return;
                 }
 
@@ -194,10 +194,10 @@ public partial class UpdateHandler(
                         await bot.SendMessage(callbackQuery.Message!.Chat.Id,
                             messageThreadId: callbackQuery.Message.MessageThreadId,
                             text:
-                            $"Ура! {date:dd.MM.yyyy} все могут! Удобное время: <b>{date:HH:mm}</b>",
+                            $"⭐ Судьба совпала! {date:dd.MM.yyyy} братство объединено! Час кампании: <b>{date:HH:mm}</b>",
                             parseMode: ParseMode.Html, linkPreviewOptions: true,
                             replyMarkup: new InlineKeyboardMarkup(
-                                InlineKeyboardButton.WithCallbackData("Сохранить",
+                                InlineKeyboardButton.WithCallbackData("📖 Записать в летописи",
                                     $"save;{date:dd/MM/yyyy;HH:mm}")
                             )
                         );

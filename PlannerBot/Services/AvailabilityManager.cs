@@ -192,9 +192,26 @@ public class AvailabilityManager
         var now = DateTime.UtcNow;
         var dateTimeUtc = _timeZoneUtilities.ConvertToUtc(dateTime);
 
+        // Check if game is in the past
+        if (dateTimeUtc < now)
+        {
+            await _bot.SendMessage(message.Chat.Id,
+                messageThreadId: message.MessageThreadId,
+                text: "⚠️ Нельзя назначить битву в прошлое!",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new ReplyKeyboardRemove());
+            return;
+        }
+
         await _db.SavedGame.Where(sg => sg.DateTime <= now.Date).ExecuteDeleteAsync();
 
-        if (!await _db.SavedGame.AnyAsync(sg => sg.DateTime <= dateTimeUtc))
+        // Check if game already exists on the same day (timezone-aware)
+        var allGames = await _db.SavedGame.ToListAsync();
+        var moscowGameDate = _timeZoneUtilities.ConvertToMoscow(dateTimeUtc).Date;
+        var existingGameOnDate = allGames.Any(sg =>
+            _timeZoneUtilities.ConvertToMoscow(sg.DateTime).Date == moscowGameDate);
+
+        if (!existingGameOnDate)
         {
             var savedGame = new SavedGame
             {

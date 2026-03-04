@@ -275,17 +275,7 @@ public partial class UpdateHandler(
             await availabilityManager.SavePlannedGame(votingMessage.GameDateTime, messageInfo);
             await availabilityManager.DeleteVotingSession(votingMessage.Id);
             
-            var culture = timeZoneUtilities.GetRussianCultureInfo();
-            var dateStr = timeZoneUtilities
-                .ConvertToMoscow(votingMessage.GameDateTime)
-                .ToString("dd.MM.yyyy (ddd) HH:mm", culture);
-
-            await bot.EditMessageText(
-                votingMessage.ChatId,
-                votingMessage.MessageId,
-                $"✅ Битва записана в летописи на {dateStr}!",
-                parseMode: ParseMode.Html,
-                linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true });
+            await bot.DeleteMessage(votingMessage.ChatId, votingMessage.MessageId);
         }
     }
 

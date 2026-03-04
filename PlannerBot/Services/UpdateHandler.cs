@@ -1,4 +1,5 @@
 using System.Globalization;
+using Microsoft.EntityFrameworkCore;
 using PlannerBot.Data;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
@@ -19,9 +20,9 @@ public partial class UpdateHandler(
     TimeZoneUtilities timeZoneUtilities,
     KeyboardGenerator keyboardGenerator,
     AvailabilityManager availabilityManager,
-    CommandHandler commandHandler) : IUpdateHandler
+    CommandHandler commandHandler,
+    AppDbContext db) : IUpdateHandler
 {
-
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
         CancellationToken cancellationToken)
     {
@@ -30,6 +31,7 @@ public partial class UpdateHandler(
         {
             { Message: { } message } => OnMessage(message),
             { CallbackQuery: { } callbackQuery } => OnCallbackQuery(callbackQuery),
+            { MessageReaction: { } reactionUpdated } => OnMessageReaction(reactionUpdated),
             _ => UnknownUpdateHandlerAsync(update)
         });
     }
@@ -169,15 +171,6 @@ public partial class UpdateHandler(
                     new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
                 break;
             }
-            case "save":
-            {
-                var culture = timeZoneUtilities.GetRussianCultureInfo();
-                var dateTime = DateTime.ParseExact($"{split[1]};{split[2]}", "dd/MM/yyyy;HH:mm", culture);
-
-                await availabilityManager.SavePlannedGame(dateTime, callbackQuery.Message!, logger);
-
-                break;
-            }
             case "delete":
             {
                 await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
@@ -192,16 +185,24 @@ public partial class UpdateHandler(
                     if (suitableTime is not null)
                     {
                         date = date.Add(suitableTime.Value.TimeOfDay);
-                        await bot.SendMessage(callbackQuery.Message!.Chat.Id,
+                        var sentMessage = await bot.SendMessage(callbackQuery.Message!.Chat.Id,
                             messageThreadId: callbackQuery.Message.MessageThreadId,
                             text:
-                            $"⭐ Судьба совпала! {date:dd.MM.yyyy} братство объединено! Час кампании: <b>{date:HH:mm}</b>",
-                            parseMode: ParseMode.Html, linkPreviewOptions: true,
-                            replyMarkup: new InlineKeyboardMarkup(
-                                InlineKeyboardButton.WithCallbackData("📖 Записать в летописи",
-                                    $"save;{date:dd/MM/yyyy;HH:mm}")
-                            )
-                        );
+                            $"⭐ Судьба совпала! {date:dd.MM.yyyy} братство объединено! Час кампании: <b>{date:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!",
+                            parseMode: ParseMode.Html, linkPreviewOptions: true);
+
+                        // Create voting session and store message ID
+                        var votingMessage = await availabilityManager.CreateVotingSession(timeZoneUtilities.ConvertToUtc(date), sentMessage);
+                        if (votingMessage is not null)
+                        {
+                            votingMessage.MessageId = sentMessage.MessageId;
+                            await db.SaveChangesAsync();
+
+                            await bot.SetMessageReaction(
+                                callbackQuery.Message.Chat.Id,
+                                sentMessage.MessageId,
+                                [new ReactionTypeEmoji { Emoji = "👍" }]);
+                        }
                     }
                 }
 
@@ -210,6 +211,79 @@ public partial class UpdateHandler(
         }
 
         await bot.AnswerCallbackQuery(callbackQuery.Id);
+    }
+
+    private async Task OnMessageReaction(MessageReactionUpdated reactionUpdated)
+    {
+        var hasThumbsUpInNew = reactionUpdated.NewReaction.Any(r => r is ReactionTypeEmoji { Emoji: "👍" });
+        var hasThumbsUpInOld = reactionUpdated.OldReaction.Any(r => r is ReactionTypeEmoji { Emoji: "👍" });
+
+        // If reaction wasn't added or removed, ignore
+        if (hasThumbsUpInNew == hasThumbsUpInOld)
+            return;
+
+        var votingMessage = await db.VoteSessions
+            .FirstOrDefaultAsync(vm => 
+                vm.ChatId == reactionUpdated.Chat.Id && 
+                vm.MessageId == reactionUpdated.MessageId);
+
+        if (votingMessage is null)
+            return;
+
+        var user = await db.Users.FirstOrDefaultAsync(u => reactionUpdated.User != null && u.Username == reactionUpdated.User.Username);
+        if (user is null || !user.IsActive)
+            return;
+
+        bool thresholdReached = false;
+
+        // Reaction was added
+        if (hasThumbsUpInNew && !hasThumbsUpInOld)
+        {
+            thresholdReached = await availabilityManager.IncrementVoteAndCheckThreshold(votingMessage.Id);
+        }
+        // Reaction was removed
+        else if (!hasThumbsUpInNew && hasThumbsUpInOld)
+        {
+            await availabilityManager.DecrementVote(votingMessage.Id);
+        }
+
+        var activeUsersCount = await db.Users.Where(u => u.IsActive).CountAsync();
+        var updatedVotingMessage = await availabilityManager.GetVotingMessage(votingMessage.Id);
+        
+        if (updatedVotingMessage is not null)
+        {
+            await bot.EditMessageText(
+                votingMessage.ChatId,
+                votingMessage.MessageId,
+                $"⭐ Судьба совпала! {updatedVotingMessage.GameDateTime:dd.MM.yyyy} братство объединено! Час кампании: <b>{updatedVotingMessage.GameDateTime:HH:mm}</b>\n\n👍 Голосов: {updatedVotingMessage.VoteCount}/{activeUsersCount}",
+                parseMode: ParseMode.Html,
+                linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true });
+        }
+
+        if (thresholdReached)
+        {
+            var messageInfo = new Message
+            {
+                Chat = new Chat { Id = votingMessage.ChatId },
+                Id = votingMessage.MessageId,
+                MessageThreadId = votingMessage.ThreadId
+            };
+
+            await availabilityManager.SavePlannedGame(votingMessage.GameDateTime, messageInfo);
+            await availabilityManager.DeleteVotingSession(votingMessage.Id);
+            
+            var culture = timeZoneUtilities.GetRussianCultureInfo();
+            var dateStr = timeZoneUtilities
+                .ConvertToMoscow(votingMessage.GameDateTime)
+                .ToString("dd.MM.yyyy (ddd) HH:mm", culture);
+
+            await bot.EditMessageText(
+                votingMessage.ChatId,
+                votingMessage.MessageId,
+                $"✅ Битва записана в летописи на {dateStr}!",
+                parseMode: ParseMode.Html,
+                linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true });
+        }
     }
 
     private async Task OnCommand(string command, string args, Message msg)

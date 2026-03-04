@@ -1,6 +1,6 @@
-using Microsoft.Extensions.Logging;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
+using Telegram.Bot.Types.Enums;
 
 namespace PlannerBot.Abstract;
 
@@ -12,7 +12,16 @@ public abstract class ReceiverServiceBase<TUpdateHandler>(ITelegramBotClient bot
     /// <summary>Start to service Updates with provided Update Handler class</summary>
     public async Task ReceiveAsync(CancellationToken stoppingToken)
     {
-        var receiverOptions = new ReceiverOptions() { DropPendingUpdates = true, AllowedUpdates = [] };
+        var receiverOptions = new ReceiverOptions() 
+        { 
+            DropPendingUpdates = true, 
+            AllowedUpdates =
+            [
+                UpdateType.Message,
+                UpdateType.CallbackQuery,
+                UpdateType.MessageReaction
+            ]
+        };
 
         var me = await botClient.GetMe(stoppingToken);
         logger.LogInformation("Start receiving updates for {BotName}", me.Username ?? "My Awesome Bot");

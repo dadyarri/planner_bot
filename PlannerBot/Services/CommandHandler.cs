@@ -115,14 +115,23 @@ public class CommandHandler(
         if (suitableTime is not null)
         {
             var today = timeZoneUtilities.GetMoscowDate().Add(suitableTime.Value.TimeOfDay);
-            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{today:HH:mm}</b>",
-                parseMode: ParseMode.Html, linkPreviewOptions: true,
-                replyMarkup: new InlineKeyboardMarkup(
-                    InlineKeyboardButton.WithCallbackData("📖 Начертать в летописи",
-                        $"save;{today:dd/MM/yyyy;HH:mm}")
-                )
+            var sentMessage = await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{today:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!",
+                parseMode: ParseMode.Html, linkPreviewOptions: true
             );
+
+            // Create voting session and store message ID
+            var votingMessage = await availabilityManager.CreateVotingSession(timeZoneUtilities.ConvertToUtc(today), sentMessage);
+            if (votingMessage is not null)
+            {
+                votingMessage.MessageId = sentMessage.MessageId;
+                await db.SaveChangesAsync();
+
+                await bot.SetMessageReaction(
+                    msg.Chat.Id,
+                    sentMessage.MessageId,
+                    [new ReactionTypeEmoji { Emoji = "👍" }]);
+            }
         }
     }
 
@@ -339,7 +348,7 @@ public class CommandHandler(
             return;
         }
 
-        await availabilityManager.SavePlannedGame(date, msg, logger);
+        await availabilityManager.SavePlannedGame(date, msg);
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
     }
 

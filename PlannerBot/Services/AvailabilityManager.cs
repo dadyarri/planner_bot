@@ -24,6 +24,7 @@ public class AvailabilityManager
     private readonly ITelegramBotClient _bot;
     private readonly ITimeTickerManager<TimeTickerEntity> _ticker;
     private readonly TimeZoneUtilities _timeZoneUtilities;
+    private readonly ILogger<AvailabilityManager> _logger;
 
     private static readonly TimeSpan[] ReminderIntervals =
     [
@@ -36,12 +37,13 @@ public class AvailabilityManager
         AppDbContext db,
         ITelegramBotClient bot,
         ITimeTickerManager<TimeTickerEntity> ticker,
-        TimeZoneUtilities timeZoneUtilities)
+        TimeZoneUtilities timeZoneUtilities, ILogger<AvailabilityManager> logger)
     {
         _db = db;
         _bot = bot;
         _ticker = ticker;
         _timeZoneUtilities = timeZoneUtilities;
+        _logger = logger;
     }
 
     /// <summary>
@@ -185,7 +187,7 @@ public class AvailabilityManager
     /// <summary>
     /// Saves a game and schedules reminders at specified intervals before the game.
     /// </summary>
-    public async Task SavePlannedGame(DateTime dateTime, Message message, ILogger<UpdateHandler> logger)
+    public async Task SavePlannedGame(DateTime dateTime, Message message)
     {
         var now = DateTime.UtcNow;
         var dateTimeUtc = _timeZoneUtilities.ConvertToUtc(dateTime);
@@ -224,7 +226,7 @@ public class AvailabilityManager
 
                 if (schedulingResult.IsSucceeded)
                 {
-                    logger.LogInformation("Reminder scheduled to {ExecutionTime}", executionTime);
+                    _logger.LogInformation("Reminder scheduled to {ExecutionTime}", executionTime);
                 }
             }
 
@@ -254,6 +256,85 @@ public class AvailabilityManager
                 text: "⚔️ На этот день битва уже назначена!",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,
                 replyMarkup: new ReplyKeyboardRemove());
+        }
+    }
+
+    /// <summary>
+    /// Creates a voting session for a specific game datetime.
+    /// Returns the stored voting message containing message and chat IDs for tracking reactions.
+    /// </summary>
+    public async Task<VoteSession?> CreateVotingSession(DateTime gameDateTime, Message message)
+    {
+        var voteSession = new VoteSession
+        {
+            ChatId = message.Chat.Id,
+            GameDateTime = gameDateTime,
+            ThreadId = message.MessageThreadId ?? 0,
+            VoteCount = 0,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _db.VoteSessions.AddAsync(voteSession);
+        await _db.SaveChangesAsync();
+
+        return voteSession;
+    }
+
+    /// <summary>
+    /// Increments vote count for a voting session and checks if threshold is reached.
+    /// Returns true if all active players have voted.
+    /// </summary>
+    public async Task<bool> IncrementVoteAndCheckThreshold(long votingMessageId)
+    {
+        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
+        if (votingMessage is null)
+            return false;
+
+        votingMessage.VoteCount++;
+
+        var activeUsersCount = await _db.Users
+            .Where(u => u.IsActive)
+            .CountAsync();
+
+        await _db.SaveChangesAsync();
+
+        return votingMessage.VoteCount >= activeUsersCount;
+    }
+
+    /// <summary>
+    /// Decrements vote count for a voting session when a user removes their reaction.
+    /// </summary>
+    public async Task DecrementVote(long votingMessageId)
+    {
+        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
+        if (votingMessage is null)
+            return;
+
+        if (votingMessage.VoteCount > 0)
+        {
+            votingMessage.VoteCount--;
+            await _db.SaveChangesAsync();
+        }
+    }
+
+    /// <summary>
+    /// Gets a voting message session by ID.
+    /// </summary>
+    public async Task<VoteSession?> GetVotingMessage(long votingMessageId)
+    {
+        return await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
+    }
+
+    /// <summary>
+    /// Deletes a voting message session (after threshold is reached or expires).
+    /// </summary>
+    public async Task DeleteVotingSession(long votingMessageId)
+    {
+        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
+        if (votingMessage is not null)
+        {
+            _db.VoteSessions.Remove(votingMessage);
+            await _db.SaveChangesAsync();
         }
     }
 }

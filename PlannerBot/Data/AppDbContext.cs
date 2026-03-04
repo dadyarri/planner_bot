@@ -10,6 +10,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options): DbContext(opt
     public DbSet<Response> Responses { get; set; }
     public DbSet<User> Users { get; set; }
     public DbSet<SavedGame> SavedGame { get; set; }
+    public DbSet<VoteSession> VoteSessions { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

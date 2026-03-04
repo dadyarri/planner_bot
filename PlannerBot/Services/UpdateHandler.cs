@@ -177,6 +177,9 @@ public partial class UpdateHandler(
                 await availabilityManager.SetUnavailableForUnmarkedDays(callbackQuery.From.Username);
 
                 var now = DateTime.UtcNow;
+                var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
+                var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
+
                 for (var i = 0; i < 8; i++)
                 {
                     var date = now.AddDays(i).Date;
@@ -188,7 +191,7 @@ public partial class UpdateHandler(
                         var sentMessage = await bot.SendMessage(callbackQuery.Message!.Chat.Id,
                             messageThreadId: callbackQuery.Message.MessageThreadId,
                             text:
-                            $"⭐ Судьба совпала! {date:dd.MM.yyyy} братство объединено! Час кампании: <b>{date:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!",
+                            $"⭐ Судьба совпала! {date:dd.MM.yyyy} братство объединено! Час кампании: <b>{date:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
                             parseMode: ParseMode.Html, linkPreviewOptions: true);
 
                         // Create voting session and store message ID

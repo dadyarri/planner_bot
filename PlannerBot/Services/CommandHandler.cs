@@ -115,8 +115,11 @@ public class CommandHandler(
         if (suitableTime is not null)
         {
             var today = timeZoneUtilities.GetMoscowDate().Add(suitableTime.Value.TimeOfDay);
+            var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
+            var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
+
             var sentMessage = await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{today:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!",
+                text: $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{today:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
                 parseMode: ParseMode.Html, linkPreviewOptions: true
             );
 

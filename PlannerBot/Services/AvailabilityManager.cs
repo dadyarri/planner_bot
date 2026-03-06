@@ -118,6 +118,14 @@ public class AvailabilityManager
             .Where(u => u.IsActive)
             .CountAsync();
 
+        var dateOnly = date.Date;
+        var gameExistsOnDate = await _db.SavedGame
+            .Where(sg => sg.DateTime.Date == dateOnly)
+            .AnyAsync();
+
+        if (gameExistsOnDate)
+            return null;
+
         var responses = await _db.Responses
             .Where(r =>
                 r.DateTime.HasValue && r.DateTime.Value.Date == date.Date &&

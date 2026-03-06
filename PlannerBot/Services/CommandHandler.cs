@@ -186,12 +186,10 @@ public class CommandHandler(
 
         var moscowNow = timeZoneUtilities.GetMoscowDateTime();
         var startMoscowDate = moscowNow.Date;
-        var endMoscowDate = startMoscowDate.AddDays(6);
+        var endMoscowDate = startMoscowDate.AddDays(13);
 
-        var startUtcDate =
-            timeZoneUtilities.ConvertToUtc(DateTime.SpecifyKind(startMoscowDate, DateTimeKind.Unspecified));
-        var endUtcDate =
-            timeZoneUtilities.ConvertToUtc(DateTime.SpecifyKind(endMoscowDate.AddDays(1), DateTimeKind.Unspecified));
+        var startUtcDate = timeZoneUtilities.ConvertToUtc(startMoscowDate);
+        var endUtcDate = timeZoneUtilities.ConvertToUtc(endMoscowDate.AddDays(1));
 
         var sb = new StringBuilder();
         var culture = timeZoneUtilities.GetRussianCultureInfo();
@@ -201,13 +199,19 @@ public class CommandHandler(
                         r.DateTime.Value >= startUtcDate && r.DateTime.Value < endUtcDate)
             .ToListAsync();
 
-        for (var i = 0; i < 7; i++)
+        sb.AppendLine("<b>📅 РАСПИСАНИЕ БРАТСТВА</b>");
+        sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        sb.AppendLine();
+
+        for (var i = 0; i < 12; i++)
         {
             var moscowDate = startMoscowDate.AddDays(i);
+            var isToday = moscowDate == startMoscowDate;
+            var dayMarker = isToday ? " 📍" : string.Empty;
 
-            sb.AppendLine($"<b>{moscowDate.ToString("dd MMM (ddd)", culture)}</b>");
-            sb.AppendLine();
+            sb.AppendLine($"<b>{moscowDate.ToString("dd MMM (ddd)", culture)}</b>{dayMarker}");
 
+            var dayResponses = new List<string>();
             foreach (var user in users)
             {
                 var response = allResponses
@@ -220,16 +224,19 @@ public class CommandHandler(
                     response.DateTime.Value.TimeOfDay != TimeSpan.Zero)
                 {
                     var moscowTime = timeZoneUtilities.ConvertToMoscow(response.DateTime.Value);
-                    time = $" (с {moscowTime:HH:mm})";
+                    time = $" <i>с {moscowTime:HH:mm}</i>";
                 }
 
-                sb.AppendLine(
-                    $"{user.Name}: <i>{(response?.Availability ?? Availability.Unknown).ToSign()}{time}</i>");
+                var availability = (response?.Availability ?? Availability.Unknown).ToSign();
+                dayResponses.Add($"  {availability} {user.Name}{time}");
             }
 
+            sb.AppendLine(string.Join("\n", dayResponses));
             sb.AppendLine();
         }
-        
+
+        sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        sb.AppendLine();
         var nearestFittingDateTime = await db.Responses
             .Include(v => v.User)
             .Where(v => v.DateTime.HasValue &&

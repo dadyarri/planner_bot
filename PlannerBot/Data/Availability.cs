@@ -16,10 +16,10 @@ public static class AvailabilityExtensions
         {
             return availability switch
             {
-                Availability.Yes => "+",
-                Availability.No => "-",
-                Availability.Probably => "?",
-                Availability.Unknown => "???",
+                Availability.Yes => "🟢",
+                Availability.No => "🔴",
+                Availability.Probably => "🤷",
+                Availability.Unknown => "🤐",
                 _ => throw new ArgumentOutOfRangeException(nameof(availability), availability, null)
             };
         }

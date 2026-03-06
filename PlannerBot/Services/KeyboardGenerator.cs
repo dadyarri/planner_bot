@@ -12,8 +12,8 @@ namespace PlannerBot.Services;
 public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilities)
 {
     /// <summary>
-    /// Generates a keyboard for planning availability over 8 days.
-    /// Displays current availability status (✅/❌/❓) for each day.
+    /// Generates a keyboard for planning availability over 12 days.
+    /// Displays current availability status for each day.
     /// </summary>
     public async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(
         string? username = null)
@@ -21,7 +21,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         var now = DateTime.UtcNow;
         var today = now.Date;
 
-        const int weeks = 2;
+        const int weeks = 3;
         const int daysInWeek = 4;
 
         var inlineKeyboardButtons = new InlineKeyboardButton[weeks + 1][];
@@ -43,9 +43,9 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
                 var emoji = availability switch
                 {
-                    Availability.Yes => "✅ ",
-                    Availability.No => "❌ ",
-                    Availability.Probably => "❓ ",
+                    Availability.Yes => "🟢 ",
+                    Availability.No => "🔴 ",
+                    Availability.Probably => "🤷 ",
                     _ => string.Empty
                 };
 
@@ -58,7 +58,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
             }
         }
 
-        inlineKeyboardButtons[2] =
+        inlineKeyboardButtons[3] =
         [
             InlineKeyboardButton.WithCallbackData(
                 "Закончить",
@@ -79,9 +79,9 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         return
         [
             [
-                InlineKeyboardButton.WithCallbackData("✅", $"pstatus;{(int)Availability.Yes};{date:dd/MM/yyyy};{username}"),
-                InlineKeyboardButton.WithCallbackData("❌", $"pstatus;{(int)Availability.No};{date:dd/MM/yyyy};{username}"),
-                InlineKeyboardButton.WithCallbackData("❓", $"pstatus;{(int)Availability.Probably};{date:dd/MM/yyyy};{username}"),
+                InlineKeyboardButton.WithCallbackData("🟢", $"pstatus;{(int)Availability.Yes};{date:dd/MM/yyyy};{username}"),
+                InlineKeyboardButton.WithCallbackData("🔴", $"pstatus;{(int)Availability.No};{date:dd/MM/yyyy};{username}"),
+                InlineKeyboardButton.WithCallbackData("🤷", $"pstatus;{(int)Availability.Probably};{date:dd/MM/yyyy};{username}"),
             ],
             [
                 InlineKeyboardButton.WithCallbackData("Назад", $"pback;{username}")

@@ -119,12 +119,14 @@ public class CommandHandler(
             var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
 
             var sentMessage = await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{today:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
+                text:
+                $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{today:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
                 parseMode: ParseMode.Html, linkPreviewOptions: true
             );
 
             // Create voting session and store message ID
-            var votingMessage = await availabilityManager.CreateVotingSession(timeZoneUtilities.ConvertToUtc(today), sentMessage);
+            var votingMessage =
+                await availabilityManager.CreateVotingSession(timeZoneUtilities.ConvertToUtc(today), sentMessage);
             if (votingMessage is not null)
             {
                 votingMessage.MessageId = sentMessage.MessageId;
@@ -182,8 +184,6 @@ public class CommandHandler(
             .Where(u => u.IsActive)
             .ToListAsync();
 
-        var usernames = users.Select(u => u.Username).ToList();
-
         var moscowNow = timeZoneUtilities.GetMoscowDateTime();
         var startMoscowDate = moscowNow.Date;
         var endMoscowDate = startMoscowDate.AddDays(13);
@@ -235,26 +235,25 @@ public class CommandHandler(
             sb.AppendLine();
         }
 
-        sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        sb.AppendLine();
-        var nearestFittingDateTime = await db.Responses
-            .Include(v => v.User)
-            .Where(v => v.DateTime.HasValue &&
-                        v.DateTime.Value >= startUtcDate &&
-                        v.DateTime.Value < endUtcDate &&
-                        usernames.Contains(v.User.Username) && v.User.IsActive &&
-                        (v.Availability == Availability.Yes || v.Availability == Availability.Probably))
-            .GroupBy(v => v.DateTime!.Value.Date)
-            .Where(g => g.Count() == usernames.Count)
-            .OrderBy(g => g.Key)
-            .Select(g => g.Max(v => v.DateTime!.Value))
-            .FirstOrDefaultAsync();
-
-        var format = nearestFittingDateTime != default
-            ? timeZoneUtilities.ConvertToMoscow(nearestFittingDateTime).ToString("dd MMM (ddd) HH:mm", culture)
-            : "не найдено";
-
-        sb.Append($"<b>Ближайшая удобная дата</b>: {format}");
+        // sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // sb.AppendLine();
+        //
+        // DateTime nearestFittingDateTime = default;
+        // for (var i = 0; i < 12; i++)
+        // {
+        //     var moscowDate = startMoscowDate.AddDays(i).Date;
+        //     var result = await availabilityManager.CheckIfDateIsAvailable(timeZoneUtilities.ConvertToUtc(moscowDate));
+        //
+        //     if (result is null) continue;
+        //     nearestFittingDateTime = result.Value;
+        //     break;
+        // }
+        //
+        // var format = nearestFittingDateTime != default
+        //     ? timeZoneUtilities.ConvertToMoscow(nearestFittingDateTime).ToString("dd MMM (ddd) HH:mm", culture)
+        //     : "не найдено";
+        //
+        // sb.Append($"<b>Ближайшая удобная дата</b>: {format}");
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId, text: sb.ToString(),
             parseMode: ParseMode.Html, linkPreviewOptions: true,

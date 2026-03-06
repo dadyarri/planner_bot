@@ -229,29 +229,22 @@ public class CommandHandler(
 
             sb.AppendLine();
         }
-
-        var nearestFittingDate = await db.Responses
+        
+        var nearestFittingDateTime = await db.Responses
             .Include(v => v.User)
             .Where(v => v.DateTime.HasValue &&
                         v.DateTime.Value >= startUtcDate &&
                         v.DateTime.Value < endUtcDate &&
-                        usernames.Contains(v.User.Username) && v.User.IsActive)
+                        usernames.Contains(v.User.Username) && v.User.IsActive &&
+                        (v.Availability == Availability.Yes || v.Availability == Availability.Probably))
             .GroupBy(v => v.DateTime!.Value.Date)
-            .Where(g =>
-                g.Count() == usernames.Count &&
-                g.All(v => v.Availability != Availability.No))
+            .Where(g => g.Count() == usernames.Count)
             .OrderBy(g => g.Key)
-            .Select(g => g.Key)
+            .Select(g => g.Max(v => v.DateTime!.Value))
             .FirstOrDefaultAsync();
 
-        var availableTime = await availabilityManager.CheckIfDateIsAvailable(nearestFittingDate);
-
-        var formattedDate = nearestFittingDate != default
-            ? timeZoneUtilities.ConvertToMoscow(nearestFittingDate).ToString("dd MMM (ddd)", culture)
-            : string.Empty;
-        var formattedTime = availableTime.HasValue ? availableTime.Value.ToString("hh:mm") : string.Empty;
-        var format = nearestFittingDate != default
-            ? $"{formattedDate} {formattedTime}"
+        var format = nearestFittingDateTime != default
+            ? timeZoneUtilities.ConvertToMoscow(nearestFittingDateTime).ToString("dd MMM (ddd) HH:mm", culture)
             : "не найдено";
 
         sb.Append($"<b>Ближайшая удобная дата</b>: {format}");
@@ -434,7 +427,7 @@ public class CommandHandler(
 
         try
         {
-            var r = await cronTicker.AddAsync(new CronTickerEntity
+            await cronTicker.AddAsync(new CronTickerEntity
             {
                 Function = votingReminderFunctionName,
                 Expression = votingReminderCron,

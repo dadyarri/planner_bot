@@ -23,7 +23,20 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
         const int weeks = 3;
         const int daysInWeek = 4;
+        const int totalDays = weeks * daysInWeek;
 
+        var endDate = today.AddDays(totalDays);
+
+        // Fetch all availability data for the date range in a single query
+        var availabilityByDate = await db.Responses
+            .Where(r => r.User.Username == username &&
+                        r.DateTime.HasValue &&
+                        r.DateTime.Value.Date >= today &&
+                        r.DateTime.Value.Date < endDate)
+            .Select(r => new { Date = r.DateTime!.Value.Date, r.Availability })
+            .ToDictionaryAsync(r => r.Date, r => r.Availability);
+
+        var culture = timeZoneUtilities.GetRussianCultureInfo();
         var inlineKeyboardButtons = new InlineKeyboardButton[weeks + 1][];
 
         for (var w = 0; w < weeks; w++)
@@ -34,12 +47,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
                 var offset = w * daysInWeek + d;
                 var date = today.AddDays(offset);
 
-                var availability = await db.Responses
-                    .Include(r => r.User)
-                    .Where(r => r.User.Username == username &&
-                                r.DateTime.HasValue && r.DateTime.Value.Date == date)
-                    .Select(r => r.Availability)
-                    .FirstOrDefaultAsync();
+                availabilityByDate.TryGetValue(date, out var availability);
 
                 var emoji = availability switch
                 {
@@ -49,7 +57,6 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
                     _ => string.Empty
                 };
 
-                var culture = timeZoneUtilities.GetRussianCultureInfo();
                 var format = date.ToString("dd.MM (ddd)", culture);
                 inlineKeyboardButtons[w][d] = InlineKeyboardButton.WithCallbackData(
                     $"{emoji}{format}",

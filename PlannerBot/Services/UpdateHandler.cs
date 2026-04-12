@@ -76,141 +76,141 @@ public partial class UpdateHandler(
         switch (split[0])
         {
             case "plan":
-            {
-                LogReceivedPlanCommand(logger);
-                var date = DateTime.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
-                var username = split[2];
-
-                if (username != callbackQuery.From.Username)
                 {
-                    LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
-                    await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                    return;
+                    LogReceivedPlanCommand(logger);
+                    var date = DateTime.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
+                    var username = split[2];
+
+                    if (username != callbackQuery.From.Username)
+                    {
+                        LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
+                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
+                        return;
+                    }
+
+                    await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
+                        new InlineKeyboardMarkup(keyboardGenerator.GenerateStatusKeyboard(date, username)));
+
+                    break;
                 }
-
-                await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                    new InlineKeyboardMarkup(keyboardGenerator.GenerateStatusKeyboard(date, username)));
-
-                break;
-            }
             case "pstatus":
-            {
-                LogReceivedPlanCommand(logger);
-                var availability = int.Parse(split[1]);
-                var date = DateTime.ParseExact(split[2], "dd/MM/yyyy", CultureInfo.InvariantCulture);
-                var username = split[3];
-
-                if (username != callbackQuery.From.Username)
                 {
-                    LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
-                    await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                    return;
+                    LogReceivedPlanCommand(logger);
+                    var availability = int.Parse(split[1]);
+                    var date = DateTime.ParseExact(split[2], "dd/MM/yyyy", CultureInfo.InvariantCulture);
+                    var username = split[3];
+
+                    if (username != callbackQuery.From.Username)
+                    {
+                        LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
+                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
+                        return;
+                    }
+
+                    var utcDate = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
+                    var selectedAvailability = (Availability)availability;
+
+                    if (selectedAvailability == Availability.Yes)
+                    {
+                        await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                        await bot.SendMessage(callbackQuery.Message!.Chat.Id,
+                            messageThreadId: callbackQuery.Message!.MessageThreadId,
+                            text: "🕐 Назови час присоединения к грядущей битве",
+                            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, username)));
+                    }
+                    else
+                    {
+                        await availabilityManager.UpdateResponseForDate(callbackQuery.From, selectedAvailability, utcDate);
+                        await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
+                            new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
+                    }
+
+                    break;
                 }
-
-                var utcDate = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
-                var selectedAvailability = (Availability)availability;
-
-                if (selectedAvailability == Availability.Yes)
+            case "ptime":
                 {
+                    LogReceivedPtimeCommand(logger);
+
+                    var dateTime = DateTime.SpecifyKind(
+                        DateTime.ParseExact(split[1], "dd/MM/yyyyTHH:mm", CultureInfo.InvariantCulture),
+                        DateTimeKind.Utc
+                    );
+                    var username = split[2];
+
+                    if (username != callbackQuery.From.Username)
+                    {
+                        LogWrongUserUsedPtimeButtonDataCq(logger, username, callbackQuery.From.Username!);
+                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
+                        return;
+                    }
+
+                    var utcDateTime = timeZoneUtilities.ConvertToUtc(dateTime);
+
+                    await availabilityManager.UpdateResponseForDate(callbackQuery.From, Availability.Yes, utcDateTime);
+
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                     await bot.SendMessage(callbackQuery.Message!.Chat.Id,
                         messageThreadId: callbackQuery.Message!.MessageThreadId,
-                        text: "🕐 Назови час присоединения к грядущей битве",
-                        replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, username)));
+                        text: "🗓️ Примени заклинание предсказания - объяви о свободных днях:",
+                        replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
+
+                    break;
                 }
-                else
+            case "pback":
                 {
-                    await availabilityManager.UpdateResponseForDate(callbackQuery.From, selectedAvailability, utcDate);
+                    LogReceivedPbackCommand(logger);
+                    var username = split[1];
+
+                    if (username != callbackQuery.From.Username)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
+                        return;
+                    }
+
                     await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                         new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
+                    break;
                 }
-
-                break;
-            }
-            case "ptime":
-            {
-                LogReceivedPtimeCommand(logger);
-
-                var dateTime = DateTime.SpecifyKind(
-                    DateTime.ParseExact(split[1], "dd/MM/yyyyTHH:mm", CultureInfo.InvariantCulture),
-                    DateTimeKind.Utc
-                );
-                var username = split[2];
-
-                if (username != callbackQuery.From.Username)
-                {
-                    LogWrongUserUsedPtimeButtonDataCq(logger, username, callbackQuery.From.Username!);
-                    await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                    return;
-                }
-
-                var utcDateTime = timeZoneUtilities.ConvertToUtc(dateTime);
-
-                await availabilityManager.UpdateResponseForDate(callbackQuery.From, Availability.Yes, utcDateTime);
-
-                await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
-                await bot.SendMessage(callbackQuery.Message!.Chat.Id,
-                    messageThreadId: callbackQuery.Message!.MessageThreadId,
-                    text: "🗓️ Примени заклинание предсказания - объяви о свободных днях:",
-                    replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
-
-                break;
-            }
-            case "pback":
-            {
-                LogReceivedPbackCommand(logger);
-                var username = split[1];
-
-                if (username != callbackQuery.From.Username)
-                {
-                    await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                    return;
-                }
-
-                await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                    new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
-                break;
-            }
             case "delete":
-            {
-                await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
-                await availabilityManager.SetUnavailableForUnmarkedDays(callbackQuery.From.Username);
-
-                var now = DateTime.UtcNow;
-                var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
-                var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
-
-                for (var i = 0; i < 8; i++)
                 {
-                    var date = now.AddDays(i).Date;
-                    var suitableTime = await availabilityManager.CheckIfDateIsAvailable(date);
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    await availabilityManager.SetUnavailableForUnmarkedDays(callbackQuery.From.Username);
 
-                    if (suitableTime is not null)
+                    var now = DateTime.UtcNow;
+                    var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
+                    var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
+
+                    for (var i = 0; i < 8; i++)
                     {
-                        date = date.Add(suitableTime.Value.TimeOfDay);
-                        var sentMessage = await bot.SendMessage(callbackQuery.Message!.Chat.Id,
-                            messageThreadId: callbackQuery.Message.MessageThreadId,
-                            text:
-                            $"⭐ Судьба совпала! {date:dd.MM.yyyy} братство объединено! Час кампании: <b>{date:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
-                            parseMode: ParseMode.Html, linkPreviewOptions: true);
+                        var date = now.AddDays(i).Date;
+                        var suitableTime = await availabilityManager.CheckIfDateIsAvailable(date);
 
-                        // Create voting session and store message ID
-                        var votingMessage = await availabilityManager.CreateVotingSession(timeZoneUtilities.ConvertToUtc(date), sentMessage);
-                        if (votingMessage is not null)
+                        if (suitableTime is not null)
                         {
-                            votingMessage.MessageId = sentMessage.MessageId;
-                            await db.SaveChangesAsync();
+                            date = date.Add(suitableTime.Value.TimeOfDay);
+                            var sentMessage = await bot.SendMessage(callbackQuery.Message!.Chat.Id,
+                                messageThreadId: callbackQuery.Message.MessageThreadId,
+                                text:
+                                $"⭐ Судьба совпала! {timeZoneUtilities.FormatDate(date)} братство объединено! Час кампании: <b>{timeZoneUtilities.FormatTime(date)}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
+                                parseMode: ParseMode.Html, linkPreviewOptions: true);
 
-                            await bot.SetMessageReaction(
-                                callbackQuery.Message.Chat.Id,
-                                sentMessage.MessageId,
-                                [new ReactionTypeEmoji { Emoji = "👍" }]);
+                            // Create voting session and store message ID
+                            var votingMessage = await availabilityManager.CreateVotingSession(timeZoneUtilities.ConvertToUtc(date), sentMessage);
+                            if (votingMessage is not null)
+                            {
+                                votingMessage.MessageId = sentMessage.MessageId;
+                                await db.SaveChangesAsync();
+
+                                await bot.SetMessageReaction(
+                                    callbackQuery.Message.Chat.Id,
+                                    sentMessage.MessageId,
+                                    [new ReactionTypeEmoji { Emoji = "👍" }]);
+                            }
                         }
                     }
-                }
 
-                break;
-            }
+                    break;
+                }
         }
 
         await bot.AnswerCallbackQuery(callbackQuery.Id);
@@ -226,8 +226,8 @@ public partial class UpdateHandler(
             return;
 
         var votingMessage = await db.VoteSessions
-            .FirstOrDefaultAsync(vm => 
-                vm.ChatId == reactionUpdated.Chat.Id && 
+            .FirstOrDefaultAsync(vm =>
+                vm.ChatId == reactionUpdated.Chat.Id &&
                 vm.MessageId == reactionUpdated.MessageId);
 
         if (votingMessage is null)
@@ -252,13 +252,14 @@ public partial class UpdateHandler(
 
         var activeUsersCount = await db.Users.Where(u => u.IsActive).CountAsync();
         var updatedVotingMessage = await availabilityManager.GetVotingMessage(votingMessage.Id);
-        
+
         if (updatedVotingMessage is not null)
         {
+            var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(updatedVotingMessage.GameDateTime);
             await bot.EditMessageText(
                 votingMessage.ChatId,
                 votingMessage.MessageId,
-                $"⭐ Судьба совпала! {updatedVotingMessage.GameDateTime:dd.MM.yyyy} братство объединено! Час кампании: <b>{updatedVotingMessage.GameDateTime:HH:mm}</b>\n\n👍 Голосов: {updatedVotingMessage.VoteCount}/{activeUsersCount}",
+                $"⭐ Судьба совпала! {timeZoneUtilities.FormatDate(moscowGameDateTime)} братство объединено! Час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 Голосов: {updatedVotingMessage.VoteCount}/{activeUsersCount}",
                 parseMode: ParseMode.Html,
                 linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true });
         }
@@ -274,7 +275,7 @@ public partial class UpdateHandler(
 
             await availabilityManager.SavePlannedGame(votingMessage.GameDateTime, messageInfo);
             await availabilityManager.DeleteVotingSession(votingMessage.Id);
-            
+
             await bot.DeleteMessage(votingMessage.ChatId, votingMessage.MessageId);
         }
     }

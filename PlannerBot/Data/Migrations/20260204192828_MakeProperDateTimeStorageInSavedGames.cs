@@ -17,12 +17,12 @@ namespace PlannerBot.Data.Migrations
                 type: "timestamp with time zone",
                 nullable: false,
                 defaultValue: new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified));
-            
+
             migrationBuilder.Sql("""
                                  UPDATE "SavedGame"
                                  SET "DateTime" = ("Date" + "Time") - INTERVAL '3 hour'
                                  """);
-            
+
             migrationBuilder.DropColumn(
                 name: "Date",
                 table: "SavedGame");

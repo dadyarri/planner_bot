@@ -52,4 +52,22 @@ public class TimeZoneUtilities
     /// Gets the Russian culture info for formatting.
     /// </summary>
     public CultureInfo GetRussianCultureInfo() => RussianCultureInfo;
+
+    /// <summary>
+    /// Formats a Moscow-time DateTime as "dd.MM.yyyy (ddd)".
+    /// </summary>
+    public string FormatDate(DateTime moscowDateTime) =>
+        moscowDateTime.ToString("dd.MM.yyyy (ddd)", RussianCultureInfo);
+
+    /// <summary>
+    /// Formats a Moscow-time DateTime as "dd.MM.yyyy (ddd) HH:mm".
+    /// </summary>
+    public string FormatDateTime(DateTime moscowDateTime) =>
+        moscowDateTime.ToString("dd.MM.yyyy (ddd) HH:mm", RussianCultureInfo);
+
+    /// <summary>
+    /// Formats a Moscow-time DateTime as "HH:mm".
+    /// </summary>
+    public string FormatTime(DateTime moscowDateTime) =>
+        moscowDateTime.ToString("HH:mm", RussianCultureInfo);
 }

@@ -11,18 +11,18 @@ namespace PlannerBot.Data.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            
+
             migrationBuilder.AddColumn<DateTime>(
                 name: "DateTime",
                 table: "Responses",
                 type: "timestamp with time zone",
                 nullable: true);
-            
+
             migrationBuilder.Sql("""
                                  UPDATE "Responses"
                                  SET "DateTime" = ("Date" + "Time") - INTERVAL '3 hour'
                                  """);
-            
+
             migrationBuilder.DropColumn(
                 name: "Date",
                 table: "Responses");

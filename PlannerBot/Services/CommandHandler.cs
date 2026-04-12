@@ -120,7 +120,7 @@ public class CommandHandler(
 
             var sentMessage = await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text:
-                $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{today:HH:mm}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
+                $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{timeZoneUtilities.FormatTime(today)}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
                 parseMode: ParseMode.Html, linkPreviewOptions: true
             );
 
@@ -192,7 +192,6 @@ public class CommandHandler(
         var endUtcDate = timeZoneUtilities.ConvertToUtc(endMoscowDate.AddDays(1));
 
         var sb = new StringBuilder();
-        var culture = timeZoneUtilities.GetRussianCultureInfo();
 
         var allResponses = await db.Responses
             .Where(r => r.DateTime.HasValue && r.User.IsActive &&
@@ -209,7 +208,7 @@ public class CommandHandler(
             var isToday = moscowDate == startMoscowDate;
             var dayMarker = isToday ? " 📍" : string.Empty;
 
-            sb.AppendLine($"<b>{moscowDate.ToString("dd MMM (ddd)", culture)}</b>{dayMarker}");
+            sb.AppendLine($"<b>{timeZoneUtilities.FormatDate(moscowDate)}</b>{dayMarker}");
 
             var dayResponses = new List<string>();
             foreach (var user in users)
@@ -224,7 +223,7 @@ public class CommandHandler(
                     response.DateTime.Value.TimeOfDay != TimeSpan.Zero)
                 {
                     var moscowTime = timeZoneUtilities.ConvertToMoscow(response.DateTime.Value);
-                    time = $" <i>с {moscowTime:HH:mm}</i>";
+                    time = $" <i>с {timeZoneUtilities.FormatTime(moscowTime)}</i>";
                 }
 
                 var availability = (response?.Availability ?? Availability.Unknown).ToSign();
@@ -365,11 +364,10 @@ public class CommandHandler(
         sb.AppendLine();
         sb.AppendLine();
 
-        var culture = timeZoneUtilities.GetRussianCultureInfo();
         foreach (var game in savedGames)
         {
             var gameDateTime = timeZoneUtilities.ConvertToMoscow(game.DateTime);
-            sb.AppendLine($"- [{game.Id}] {gameDateTime.ToString("dd.MM.yyyy (ddd) HH:mm", culture)}");
+            sb.AppendLine($"- [{game.Id}] {timeZoneUtilities.FormatDateTime(gameDateTime)}");
         }
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,

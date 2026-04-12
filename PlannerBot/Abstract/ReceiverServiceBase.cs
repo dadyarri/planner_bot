@@ -12,9 +12,9 @@ public abstract class ReceiverServiceBase<TUpdateHandler>(ITelegramBotClient bot
     /// <summary>Start to service Updates with provided Update Handler class</summary>
     public async Task ReceiveAsync(CancellationToken stoppingToken)
     {
-        var receiverOptions = new ReceiverOptions() 
-        { 
-            DropPendingUpdates = true, 
+        var receiverOptions = new ReceiverOptions()
+        {
+            DropPendingUpdates = true,
             AllowedUpdates =
             [
                 UpdateType.Message,

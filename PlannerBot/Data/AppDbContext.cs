@@ -5,7 +5,7 @@ using TickerQ.Utilities.Entities;
 
 namespace PlannerBot.Data;
 
-public class AppDbContext(DbContextOptions<AppDbContext> options): DbContext(options)
+public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<Response> Responses { get; set; }
     public DbSet<User> Users { get; set; }
@@ -15,7 +15,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options): DbContext(opt
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
-        
+
         modelBuilder.ApplyConfiguration(new TimeTickerConfigurations<TimeTickerEntity>());
         modelBuilder.ApplyConfiguration(new CronTickerConfigurations<CronTickerEntity>());
         modelBuilder.ApplyConfiguration(new CronTickerOccurrenceConfigurations<CronTickerEntity>());

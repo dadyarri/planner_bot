@@ -229,7 +229,6 @@ public class AvailabilityManager
             await _db.SaveChangesAsync();
 
             var timeUntilGame = dateTimeUtc - DateTime.UtcNow;
-            var culture = _timeZoneUtilities.GetRussianCultureInfo();
 
             foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
             {
@@ -260,7 +259,7 @@ public class AvailabilityManager
             foreach (var game in _db.SavedGame)
             {
                 var gameDateTime = _timeZoneUtilities.ConvertToMoscow(game.DateTime);
-                var dateStr = gameDateTime.ToString("dd.MM.yyyy (ddd) HH:mm", culture);
+                var dateStr = _timeZoneUtilities.FormatDateTime(gameDateTime);
                 sb.AppendLine($"- {dateStr}");
             }
 

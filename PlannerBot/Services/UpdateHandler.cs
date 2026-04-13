@@ -112,9 +112,7 @@ public partial class UpdateHandler(
 
                     if (selectedAvailability == Availability.Yes)
                     {
-                        await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
-                        await bot.SendMessage(callbackQuery.Message!.Chat.Id,
-                            messageThreadId: callbackQuery.Message!.MessageThreadId,
+                        await bot.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                             text: "🕐 Назови час присоединения к грядущей битве",
                             replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, username)));
                     }
@@ -148,9 +146,7 @@ public partial class UpdateHandler(
 
                     await availabilityManager.UpdateResponseForDate(callbackQuery.From, Availability.Yes, utcDateTime);
 
-                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
-                    await bot.SendMessage(callbackQuery.Message!.Chat.Id,
-                        messageThreadId: callbackQuery.Message!.MessageThreadId,
+                    await bot.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                         text: "🗓️ Примени заклинание предсказания - объяви о свободных днях:",
                         replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
 

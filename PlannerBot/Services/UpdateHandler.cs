@@ -395,12 +395,11 @@ public partial class UpdateHandler(
 
                     // Delete the campaign picker message and show slot picker
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
-                    var fakeMsg = new Message
-                    {
-                        Chat = callbackQuery.Message.Chat,
-                        MessageThreadId = callbackQuery.Message.MessageThreadId
-                    };
-                    await commandHandler.ShowSlotPickerForCampaign(fakeMsg, campaignId, user.Username);
+                    await commandHandler.ShowSlotPickerForCampaign(
+                        callbackQuery.Message.Chat.Id,
+                        callbackQuery.Message.MessageThreadId,
+                        campaignId,
+                        user.Username);
 
                     break;
                 }

@@ -350,8 +350,15 @@ public class CommandHandler(
             return;
         }
 
-        var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
-        var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
+        // Build mentions from campaign members
+        var memberUserIds = await db.CampaignMembers
+            .Where(cm => cm.CampaignId == campaign.Id)
+            .Select(cm => cm.UserId)
+            .ToListAsync();
+        var memberUsers = await db.Users
+            .Where(u => memberUserIds.Contains(u.Id))
+            .ToListAsync();
+        var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
 
         await votingManager.SendVotingMessage(
             msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
@@ -675,7 +682,7 @@ public class CommandHandler(
                     return;
                 }
 
-                await ShowSlotPickerForCampaign(msg, campaign.Id, user.Username);
+                await ShowSlotPickerForCampaign(msg.Chat.Id, msg.MessageThreadId, campaign.Id, user.Username);
                 return;
             }
         }
@@ -703,7 +710,7 @@ public class CommandHandler(
     /// Shows the slot picker for a campaign, filtering out past slots.
     /// Shared between the campaign thread flow and the service thread callback.
     /// </summary>
-    internal async Task ShowSlotPickerForCampaign(Message msg, int campaignId, string username)
+    internal async Task ShowSlotPickerForCampaign(long chatId, int? threadId, int campaignId, string username)
     {
         var now = DateTime.UtcNow;
         var slots = await db.AvailableSlots
@@ -713,7 +720,7 @@ public class CommandHandler(
 
         if (slots.Count == 0)
         {
-            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            await bot.SendMessage(chatId, messageThreadId: threadId,
                 text: "⚠️ Свободных слотов не найдено. Попроси игроков заполнить /plan.",
                 parseMode: ParseMode.Html);
             return;
@@ -721,7 +728,7 @@ public class CommandHandler(
 
         var keyboard = keyboardGenerator.GenerateSlotPickerKeyboard(campaignId, slots, username);
 
-        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+        await bot.SendMessage(chatId, messageThreadId: threadId,
             text: "🎲 Выбери свободный слот для битвы:",
             parseMode: ParseMode.Html,
             replyMarkup: new InlineKeyboardMarkup(keyboard));

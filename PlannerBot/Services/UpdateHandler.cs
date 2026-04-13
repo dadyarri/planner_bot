@@ -20,6 +20,8 @@ public partial class UpdateHandler(
     TimeZoneUtilities timeZoneUtilities,
     KeyboardGenerator keyboardGenerator,
     AvailabilityManager availabilityManager,
+    VotingManager votingManager,
+    GameScheduler gameScheduler,
     CommandHandler commandHandler,
     AppDbContext db) : IUpdateHandler
 {
@@ -187,7 +189,7 @@ public partial class UpdateHandler(
                             var moscowGameDateTime = suitableTime.Value;
                             var utcGameDateTime = timeZoneUtilities.ConvertToUtc(moscowGameDateTime);
 
-                            await availabilityManager.SendVotingMessage(
+                            await votingManager.SendVotingMessage(
                                 callbackQuery.Message!.Chat.Id,
                                 callbackQuery.Message.MessageThreadId,
                                 utcGameDateTime,
@@ -217,8 +219,8 @@ public partial class UpdateHandler(
 
                     if (voteSession is not null)
                     {
-                        await availabilityManager.CloseVotingSession(voteSession.Id, VoteOutcome.Canceled);
-                        await availabilityManager.DeleteVotingSession(voteSession.Id);
+                        await votingManager.CloseVotingSession(voteSession.Id, VoteOutcome.Canceled);
+                        await votingManager.DeleteVotingSession(voteSession.Id);
                     }
 
                     await bot.EditMessageText(
@@ -277,12 +279,12 @@ public partial class UpdateHandler(
         {
             if (hasThumbsUpInNew && !hasThumbsUpInOld)
             {
-                outcome = await availabilityManager.RecordVoteAndCheckOutcome(
+                outcome = await votingManager.RecordVoteAndCheckOutcome(
                     votingSession.Id, user.Id, VoteType.For);
             }
             else if (!hasThumbsUpInNew && hasThumbsUpInOld)
             {
-                await availabilityManager.RemoveVote(votingSession.Id, user.Id, VoteType.For);
+                await votingManager.RemoveVote(votingSession.Id, user.Id, VoteType.For);
             }
         }
 
@@ -291,12 +293,12 @@ public partial class UpdateHandler(
         {
             if (hasThumbsDownInNew && !hasThumbsDownInOld)
             {
-                outcome = await availabilityManager.RecordVoteAndCheckOutcome(
+                outcome = await votingManager.RecordVoteAndCheckOutcome(
                     votingSession.Id, user.Id, VoteType.Against);
             }
             else if (!hasThumbsDownInNew && hasThumbsDownInOld)
             {
-                await availabilityManager.RemoveVote(votingSession.Id, user.Id, VoteType.Against);
+                await votingManager.RemoveVote(votingSession.Id, user.Id, VoteType.Against);
             }
         }
 
@@ -314,7 +316,7 @@ public partial class UpdateHandler(
         {
             case VoteOutcome.Saved:
                 {
-                    await availabilityManager.CloseVotingSession(votingSession.Id, VoteOutcome.Saved);
+                    await votingManager.CloseVotingSession(votingSession.Id, VoteOutcome.Saved);
 
                     var messageInfo = new Message
                     {
@@ -323,8 +325,8 @@ public partial class UpdateHandler(
                         MessageThreadId = votingSession.ThreadId
                     };
 
-                    await availabilityManager.SavePlannedGame(votingSession.GameDateTime, messageInfo);
-                    await availabilityManager.DeleteVotingSession(votingSession.Id);
+                    await gameScheduler.SavePlannedGame(votingSession.GameDateTime, messageInfo);
+                    await votingManager.DeleteVotingSession(votingSession.Id);
 
                     await bot.EditMessageText(
                         votingSession.ChatId,
@@ -335,8 +337,8 @@ public partial class UpdateHandler(
                 }
             case VoteOutcome.NoConsensus:
                 {
-                    await availabilityManager.CloseVotingSession(votingSession.Id, VoteOutcome.NoConsensus);
-                    await availabilityManager.DeleteVotingSession(votingSession.Id);
+                    await votingManager.CloseVotingSession(votingSession.Id, VoteOutcome.NoConsensus);
+                    await votingManager.DeleteVotingSession(votingSession.Id);
 
                     await bot.EditMessageText(
                         votingSession.ChatId,
@@ -347,10 +349,10 @@ public partial class UpdateHandler(
                 }
             default: // Pending — update vote counts display
                 {
-                    var updatedSession = await availabilityManager.GetVotingSession(votingSession.Id);
+                    var updatedSession = await votingManager.GetVotingSession(votingSession.Id);
                     if (updatedSession is not null)
                     {
-                        var messageText = await availabilityManager.BuildVotingMessageText(updatedSession);
+                        var messageText = await votingManager.BuildVotingMessageText(updatedSession);
 
                         try
                         {

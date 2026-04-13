@@ -36,7 +36,15 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
             .Select(r => r.User.Username)
             .ToListAsync(cancellationToken);
 
-        // Exclude users who voted against this time slot
+        // Exclude users who voted against this time slot and inactive users
+        var excludedUsernames = new HashSet<string>();
+
+        var inactiveUsernames = await db.Users
+            .Where(u => !u.IsActive)
+            .Select(u => u.Username)
+            .ToListAsync(cancellationToken);
+        excludedUsernames.UnionWith(inactiveUsernames);
+
         var voteSession = await db.VoteSessions
             .Include(vs => vs.Votes)
             .FirstOrDefaultAsync(vs => vs.GameDateTime == savedGame.DateTime, cancellationToken);
@@ -53,10 +61,12 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
                 .Select(u => u.Username)
                 .ToListAsync(cancellationToken);
 
-            availablePlayers = availablePlayers
-                .Where(u => !againstUsernames.Contains(u))
-                .ToList();
+            excludedUsernames.UnionWith(againstUsernames);
         }
+
+        availablePlayers = availablePlayers
+            .Where(u => !excludedUsernames.Contains(u))
+            .ToList();
 
         var availablePlayerTags = availablePlayers.Select(u => $"@{u}").ToList();
         var interval = TimeSpan.FromMinutes(context.Request.ReminderIntervalMinutes);

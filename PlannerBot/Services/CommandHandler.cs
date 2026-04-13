@@ -24,6 +24,7 @@ public class CommandHandler(
     AppDbContext db,
     KeyboardGenerator keyboardGenerator,
     AvailabilityManager availabilityManager,
+    VotingManager votingManager,
     TimeZoneUtilities timeZoneUtilities,
     ITimeTickerManager<TimeTickerEntity> ticker,
     ICronTickerManager<CronTickerEntity> cronTicker,
@@ -120,7 +121,7 @@ public class CommandHandler(
             var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
             var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
 
-            await availabilityManager.SendVotingMessage(
+            await votingManager.SendVotingMessage(
                 msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
                 msg.From!.Username!, activeMentions, keyboardGenerator);
         }
@@ -329,7 +330,7 @@ public class CommandHandler(
         var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
         var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
 
-        await availabilityManager.SendVotingMessage(
+        await votingManager.SendVotingMessage(
             msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
             msg.From!.Username!, activeMentions, keyboardGenerator);
 

@@ -9,7 +9,9 @@ PlannerBot is a Telegram bot for coordinating D&D game sessions. It helps a grou
 **Architecture:**
 - `Services/UpdateHandler.cs` — Routes Telegram updates (messages, callbacks, reactions) to handlers
 - `Services/CommandHandler.cs` — Processes bot commands (`/plan`, `/vote`, `/yes`, `/no`, etc.)
-- `Services/AvailabilityManager.cs` — Business logic for availability tracking, voting sessions, game saving
+- `Services/AvailabilityManager.cs` — Business logic for availability tracking (responses, date checking)
+- `Services/VotingManager.cs` — Voting session lifecycle (creation, vote recording, outcome evaluation, messaging)
+- `Services/GameScheduler.cs` — Game saving and reminder scheduling
 - `Services/KeyboardGenerator.cs` — Generates inline keyboards for Telegram
 - `Services/TimeZoneUtilities.cs` — UTC ↔ Moscow timezone conversions
 - `Background/Jobs.cs` — Scheduled jobs (reminders, vote expiry, weekly notifications)

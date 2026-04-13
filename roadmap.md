@@ -41,7 +41,7 @@ Unique constraint on `(CampaignId, UserId)`. Replaces global `IsActive` for per-
 
 #### Modified Entities
 
-- **Response** — add `CampaignId` (FK → Campaign, **not null**) to track which campaign triggered the response. Availability data itself is shared across campaigns.
+- **Response** — no changes. Responses are global and not tied to any campaign.
 - **SavedGame** — add `CampaignId` (FK → Campaign, **not null**) for per-campaign scoping.
 - **VoteSession** — add `CampaignId` (FK → Campaign, **not null**) for per-campaign scoping.
 
@@ -51,9 +51,8 @@ Unique constraint on `(CampaignId, UserId)`. Replaces global `IsActive` for per-
 
 Availability responses (yes/no/probably for a date) are **shared** — not per-campaign. When a player says "I'm available Tuesday", that applies across all campaigns they belong to. This avoids asking them to fill the same calendar multiple times.
 
-- `Response` keeps its current structure (user + date + availability)
+- `Response` keeps its current structure (user + date + availability) with no campaign reference
 - `CheckIfDateIsAvailable` is scoped to campaign members (not all active users), but reads from the shared `Response` table
-- The `CampaignId` on `Response` tracks which campaign *triggered* the response, not isolating availability
 
 #### 2. Collision Checks Between Campaigns
 
@@ -101,7 +100,7 @@ Thread routing logic:
 
 ### Migration Strategy
 
-- `CampaignId` is **not null** on `Response`, `SavedGame`, `VoteSession`
+- `CampaignId` is **not null** on `SavedGame`, `VoteSession` (not on `Response` — responses are global)
 - Existing data is dropped in the migration — DMs must configure campaigns from scratch
 - If dropping data is not possible in migration, create a temporary campaign named "Временная" and assign existing records to it
 - Breaking changes are allowed — no backward compatibility needed

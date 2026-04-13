@@ -1,16 +1,15 @@
-using System.Globalization;
 using Humanizer;
 using Microsoft.EntityFrameworkCore;
 using PlannerBot.Data;
+using PlannerBot.Services;
 using Telegram.Bot;
 using Telegram.Bot.Types.Enums;
 using TickerQ.Utilities.Base;
 
 namespace PlannerBot.Background;
 
-public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
+public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db, TimeZoneUtilities timeZoneUtilities)
 {
-    private static readonly CultureInfo RussianCultureInfo = new("ru-RU");
 
     [TickerFunction("send_reminder")]
     public async Task SendReminder(TickerFunctionContext<SendReminderJobContext> context,
@@ -74,7 +73,7 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
         var message = $"""
                        {string.Join(", ", availablePlayerTags)}
 
-                       🚨 🚨 🚨 Герольды трубят — битва начнётся через {interval.Humanize(culture: RussianCultureInfo, toWords: true)}! 🚨 🚨 🚨
+                       🚨 🚨 🚨 Герольды трубят — битва начнётся через {interval.Humanize(culture: timeZoneUtilities.GetRussianCultureInfo(), toWords: true)}! 🚨 🚨 🚨
                        """;
 
         await bot.SendMessage(context.Request.ChatId, messageThreadId: context.Request.ThreadId,

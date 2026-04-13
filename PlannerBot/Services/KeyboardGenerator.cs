@@ -60,7 +60,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
                 var format = date.ToString("dd.MM (ddd)", culture);
                 inlineKeyboardButtons[w][d] = InlineKeyboardButton.WithCallbackData(
                     $"{emoji}{format}",
-                    $"plan;{date:dd/MM/yyyy};{username}"
+                    $"{CallbackActions.Plan};{date:dd/MM/yyyy};{username}"
                 );
             }
         }
@@ -69,7 +69,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         [
             InlineKeyboardButton.WithCallbackData(
                 "Закончить",
-                "delete"
+                CallbackActions.PlanDone
             )
         ];
 
@@ -86,12 +86,12 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         return
         [
             [
-                InlineKeyboardButton.WithCallbackData("🟢", $"pstatus;{(int)Availability.Yes};{date:dd/MM/yyyy};{username}"),
-                InlineKeyboardButton.WithCallbackData("🔴", $"pstatus;{(int)Availability.No};{date:dd/MM/yyyy};{username}"),
-                InlineKeyboardButton.WithCallbackData("🤷", $"pstatus;{(int)Availability.Probably};{date:dd/MM/yyyy};{username}"),
+                InlineKeyboardButton.WithCallbackData("🟢", $"{CallbackActions.PlanStatus};{(int)Availability.Yes};{date:dd/MM/yyyy};{username}"),
+                InlineKeyboardButton.WithCallbackData("🔴", $"{CallbackActions.PlanStatus};{(int)Availability.No};{date:dd/MM/yyyy};{username}"),
+                InlineKeyboardButton.WithCallbackData("🤷", $"{CallbackActions.PlanStatus};{(int)Availability.Probably};{date:dd/MM/yyyy};{username}"),
             ],
             [
-                InlineKeyboardButton.WithCallbackData("Назад", $"pback;{username}")
+                InlineKeyboardButton.WithCallbackData("Назад", $"{CallbackActions.PlanBack};{username}")
             ]
         ];
     }
@@ -120,7 +120,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
             currentRow.Add(
                 InlineKeyboardButton.WithCallbackData(
                     localDt.ToString("HH:mm"),
-                    $"ptime;{dt:dd/MM/yyyyTHH:mm};{username}"
+                    $"{CallbackActions.PlanTime};{dt:dd/MM/yyyyTHH:mm};{username}"
                 )
             );
 
@@ -136,7 +136,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         [
             InlineKeyboardButton.WithCallbackData(
                 "Назад",
-                $"pback;{username}"
+                $"{CallbackActions.PlanBack};{username}"
             )
         ]);
 
@@ -154,7 +154,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
             [
                 InlineKeyboardButton.WithCallbackData(
                     "❌ Отменить голосование",
-                    $"vote_cancel;{creatorUsername}")
+                    $"{CallbackActions.VoteCancel};{creatorUsername}")
             ]
         ];
     }

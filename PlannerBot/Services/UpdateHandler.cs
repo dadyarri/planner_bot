@@ -23,6 +23,7 @@ public partial class UpdateHandler(
     VotingManager votingManager,
     GameScheduler gameScheduler,
     CommandHandler commandHandler,
+    SlotCalculator slotCalculator,
     AppDbContext db) : IUpdateHandler
 {
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
@@ -77,7 +78,7 @@ public partial class UpdateHandler(
         LogReceivedCallbackQueryCqcommand(logger, split[0]);
         switch (split[0])
         {
-            case "plan":
+            case CallbackActions.Plan:
                 {
                     LogReceivedPlanCommand(logger);
                     var date = DateTime.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
@@ -95,7 +96,7 @@ public partial class UpdateHandler(
 
                     break;
                 }
-            case "pstatus":
+            case CallbackActions.PlanStatus:
                 {
                     LogReceivedPlanCommand(logger);
                     var availability = int.Parse(split[1]);
@@ -127,7 +128,7 @@ public partial class UpdateHandler(
 
                     break;
                 }
-            case "ptime":
+            case CallbackActions.PlanTime:
                 {
                     LogReceivedPtimeCommand(logger);
 
@@ -154,7 +155,7 @@ public partial class UpdateHandler(
 
                     break;
                 }
-            case "pback":
+            case CallbackActions.PlanBack:
                 {
                     LogReceivedPbackCommand(logger);
                     var username = split[1];
@@ -169,7 +170,7 @@ public partial class UpdateHandler(
                         new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
                     break;
                 }
-            case "delete":
+            case CallbackActions.PlanDone:
                 {
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                     await availabilityManager.SetUnavailableForUnmarkedDays(callbackQuery.From.Username);
@@ -181,7 +182,7 @@ public partial class UpdateHandler(
                     for (var i = 0; i < 8; i++)
                     {
                         var date = now.AddDays(i).Date;
-                        var suitableTime = await availabilityManager.CheckIfDateIsAvailable(date);
+                        var suitableTime = await slotCalculator.CheckIfDateIsAvailable(date);
 
                         if (suitableTime is not null)
                         {
@@ -201,7 +202,7 @@ public partial class UpdateHandler(
 
                     break;
                 }
-            case "vote_cancel":
+            case CallbackActions.VoteCancel:
                 {
                     var creatorUsername = split[1];
 

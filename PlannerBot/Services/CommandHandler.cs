@@ -108,23 +108,9 @@ public class CommandHandler(
             return;
         }
 
-        var suitableTime =
-            await availabilityManager.UpdateResponseForDate(msg.From!, Availability.Yes,
-                timeZoneUtilities.GetMoscowDate(), args);
+        await availabilityManager.UpdateResponseForDate(msg.From!, Availability.Yes,
+            timeZoneUtilities.GetMoscowDate(), args);
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["❤"]);
-
-        if (suitableTime is not null)
-        {
-            // suitableTime is already in Moscow time from CheckIfDateIsAvailable
-            var moscowGameDateTime = suitableTime.Value;
-            var utcGameDateTime = timeZoneUtilities.ConvertToUtc(moscowGameDateTime);
-            var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
-            var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
-
-            await votingManager.SendVotingMessage(
-                msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
-                msg.From!.Username!, activeMentions, keyboardGenerator);
-        }
     }
 
     private async Task HandleNoCommand(Message msg)

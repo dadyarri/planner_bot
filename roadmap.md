@@ -16,10 +16,11 @@ Support multiple D&D campaigns within the same Telegram group chat. Each campaig
 | `DungeonMasterId` | long, FK → User | The DM who created and runs this campaign |
 | `ChatId` | long | Telegram chat ID |
 | `ThreadId` | int | Dedicated Telegram thread for this campaign (thread name = campaign name) |
+| `Name` | string | Cached thread name (= campaign name), updated on campaign creation and optionally refreshed |
 | `IsActive` | bool | Soft-delete flag |
 | `CreatedAt` | DateTime | |
 
-Campaign name is derived from the thread name — no separate `Name` column needed.
+Campaign name is cached in the `Name` column (copied from the thread name at creation time) to avoid repeated Telegram API calls to resolve the thread name.
 
 #### New Entity: `CampaignMember`
 
@@ -29,7 +30,7 @@ Campaign name is derived from the thread name — no separate `Name` column need
 | `UserId` | long, FK → User | |
 | `JoinedAt` | DateTime | |
 
-Unique constraint on `(CampaignId, UserId)`. Replaces global `IsActive` for per-campaign membership.
+Unique constraint on `(CampaignId, UserId)`. The global `IsActive` flag on `User` is preserved — it allows a user to temporarily pause participation across all campaigns (via `/pause` and `/unpause`). `CampaignMember` tracks which campaigns a user belongs to, while `IsActive` controls whether they are currently participating.
 
 #### New Entity: `ServiceThread`
 

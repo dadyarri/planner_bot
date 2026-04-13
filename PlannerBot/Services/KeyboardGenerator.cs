@@ -142,4 +142,20 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
         return buttons.ToArray();
     }
+
+    /// <summary>
+    /// Generates a keyboard with a cancel button for voting sessions.
+    /// The cancel button embeds the creator's username for ownership verification.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateVoteCancelKeyboard(string creatorUsername)
+    {
+        return
+        [
+            [
+                InlineKeyboardButton.WithCallbackData(
+                    "❌ Отменить голосование",
+                    $"vote_cancel;{creatorUsername}")
+            ]
+        ];
+    }
 }

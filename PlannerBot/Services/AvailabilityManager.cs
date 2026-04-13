@@ -1,49 +1,25 @@
 using System.Diagnostics;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
-using PlannerBot.Background;
 using PlannerBot.Data;
-using Telegram.Bot;
-using Telegram.Bot.Types;
-using Telegram.Bot.Types.Enums;
-using Telegram.Bot.Types.ReplyMarkups;
-using TickerQ.Utilities;
-using TickerQ.Utilities.Entities;
-using TickerQ.Utilities.Interfaces.Managers;
 using User = PlannerBot.Data.User;
 
 namespace PlannerBot.Services;
 
 /// <summary>
-/// Manages user availability responses and game planning.
-/// Handles updating availability for dates and saving/scheduling games.
+/// Manages user availability responses.
+/// Handles updating availability for dates and checking if all users are available.
 /// </summary>
 public class AvailabilityManager
 {
     private readonly AppDbContext _db;
-    private readonly ITelegramBotClient _bot;
-    private readonly ITimeTickerManager<TimeTickerEntity> _ticker;
     private readonly TimeZoneUtilities _timeZoneUtilities;
-    private readonly ILogger<AvailabilityManager> _logger;
-
-    private static readonly TimeSpan[] ReminderIntervals =
-    [
-        TimeSpan.FromHours(48), TimeSpan.FromHours(24), TimeSpan.FromHours(5), TimeSpan.FromHours(3),
-        TimeSpan.FromHours(1),
-        TimeSpan.FromMinutes(10)
-    ];
 
     public AvailabilityManager(
         AppDbContext db,
-        ITelegramBotClient bot,
-        ITimeTickerManager<TimeTickerEntity> ticker,
-        TimeZoneUtilities timeZoneUtilities, ILogger<AvailabilityManager> logger)
+        TimeZoneUtilities timeZoneUtilities)
     {
         _db = db;
-        _bot = bot;
-        _ticker = ticker;
         _timeZoneUtilities = timeZoneUtilities;
-        _logger = logger;
     }
 
     /// <summary>
@@ -190,175 +166,5 @@ public class AvailabilityManager
         }
 
         await _db.SaveChangesAsync();
-    }
-
-    /// <summary>
-    /// Saves a game and schedules reminders at specified intervals before the game.
-    /// </summary>
-    public async Task SavePlannedGame(DateTime dateTime, Message message)
-    {
-        var now = DateTime.UtcNow;
-        var dateTimeUtc = _timeZoneUtilities.ConvertToUtc(dateTime);
-
-        // Check if game is in the past
-        if (dateTimeUtc < now)
-        {
-            await _bot.SendMessage(message.Chat.Id,
-                messageThreadId: message.MessageThreadId,
-                text: "⚠️ Нельзя назначить битву в прошлое!",
-                parseMode: ParseMode.Html, linkPreviewOptions: true,
-                replyMarkup: new ReplyKeyboardRemove());
-            return;
-        }
-
-        await _db.SavedGame.Where(sg => sg.DateTime <= now.Date).ExecuteDeleteAsync();
-
-        // Check if game already exists on the same day (timezone-aware)
-        var allGames = await _db.SavedGame.ToListAsync();
-        var moscowGameDate = _timeZoneUtilities.ConvertToMoscow(dateTimeUtc).Date;
-        var existingGameOnDate = allGames.Any(sg =>
-            _timeZoneUtilities.ConvertToMoscow(sg.DateTime).Date == moscowGameDate);
-
-        if (!existingGameOnDate)
-        {
-            var savedGame = new SavedGame
-            {
-                DateTime = dateTimeUtc
-            };
-            await _db.AddAsync(savedGame);
-            await _db.SaveChangesAsync();
-
-            var timeUntilGame = dateTimeUtc - DateTime.UtcNow;
-
-            foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
-            {
-                var executionTime = dateTimeUtc.Add(-timeSpan);
-                var reminderIntervalMinutes = (int)timeSpan.TotalMinutes;
-
-                var schedulingResult = await _ticker.AddAsync(new TimeTickerEntity
-                {
-                    Function = "send_reminder",
-                    ExecutionTime = executionTime,
-                    Request = TickerHelper.CreateTickerRequest(new SendReminderJobContext
-                    {
-                        ReminderIntervalMinutes = reminderIntervalMinutes,
-                        ChatId = message.Chat.Id,
-                        ThreadId = message.MessageThreadId,
-                        SavedGameId = savedGame.Id
-                    }),
-                });
-
-                if (schedulingResult.IsSucceeded)
-                {
-                    _logger.LogInformation("Reminder scheduled to {ExecutionTime}", executionTime);
-                }
-            }
-
-            var sb = new StringBuilder();
-
-            foreach (var game in _db.SavedGame)
-            {
-                var gameDateTime = _timeZoneUtilities.ConvertToMoscow(game.DateTime);
-                var dateStr = _timeZoneUtilities.FormatDateTime(gameDateTime);
-                sb.AppendLine($"- {dateStr}");
-            }
-
-            await _bot.SendMessage(message.Chat.Id,
-                messageThreadId: message.MessageThreadId,
-                text: $"""
-                       🏰 Битва записана в летописи! Грядущие битвы:
-
-                       {sb}
-                       """,
-                parseMode: ParseMode.Html, linkPreviewOptions: true,
-                replyMarkup: new ReplyKeyboardRemove());
-        }
-        else
-        {
-            await _bot.SendMessage(message.Chat.Id,
-                messageThreadId: message.MessageThreadId,
-                text: "⚔️ На этот день битва уже назначена!",
-                parseMode: ParseMode.Html, linkPreviewOptions: true,
-                replyMarkup: new ReplyKeyboardRemove());
-        }
-    }
-
-    /// <summary>
-    /// Creates a voting session for a specific game datetime.
-    /// Returns the stored voting message containing message and chat IDs for tracking reactions.
-    /// </summary>
-    public async Task<VoteSession?> CreateVotingSession(DateTime gameDateTime, Message message)
-    {
-        var voteSession = new VoteSession
-        {
-            ChatId = message.Chat.Id,
-            GameDateTime = gameDateTime,
-            ThreadId = message.MessageThreadId ?? 0,
-            VoteCount = 0,
-            CreatedAt = DateTime.UtcNow
-        };
-
-        await _db.VoteSessions.AddAsync(voteSession);
-        await _db.SaveChangesAsync();
-
-        return voteSession;
-    }
-
-    /// <summary>
-    /// Increments vote count for a voting session and checks if threshold is reached.
-    /// Returns true if all active players have voted.
-    /// </summary>
-    public async Task<bool> IncrementVoteAndCheckThreshold(long votingMessageId)
-    {
-        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
-        if (votingMessage is null)
-            return false;
-
-        votingMessage.VoteCount++;
-
-        var activeUsersCount = await _db.Users
-            .Where(u => u.IsActive)
-            .CountAsync();
-
-        await _db.SaveChangesAsync();
-
-        return votingMessage.VoteCount >= activeUsersCount;
-    }
-
-    /// <summary>
-    /// Decrements vote count for a voting session when a user removes their reaction.
-    /// </summary>
-    public async Task DecrementVote(long votingMessageId)
-    {
-        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
-        if (votingMessage is null)
-            return;
-
-        if (votingMessage.VoteCount > 0)
-        {
-            votingMessage.VoteCount--;
-            await _db.SaveChangesAsync();
-        }
-    }
-
-    /// <summary>
-    /// Gets a voting message session by ID.
-    /// </summary>
-    public async Task<VoteSession?> GetVotingMessage(long votingMessageId)
-    {
-        return await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
-    }
-
-    /// <summary>
-    /// Deletes a voting message session (after threshold is reached or expires).
-    /// </summary>
-    public async Task DeleteVotingSession(long votingMessageId)
-    {
-        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
-        if (votingMessage is not null)
-        {
-            _db.VoteSessions.Remove(votingMessage);
-            await _db.SaveChangesAsync();
-        }
     }
 }

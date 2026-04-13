@@ -16,7 +16,7 @@ using TickerQ.Utilities.Interfaces.Managers;
 namespace PlannerBot.Services;
 
 /// <summary>
-/// Handles execution of bot commands (/start, /yes, /no, /plan, /save, etc.).
+/// Handles execution of bot commands (/start, /yes, /no, /plan, /vote, etc.).
 /// Each command handler method processes user input and sends appropriate responses.
 /// </summary>
 public class CommandHandler(
@@ -24,6 +24,7 @@ public class CommandHandler(
     AppDbContext db,
     KeyboardGenerator keyboardGenerator,
     AvailabilityManager availabilityManager,
+    VotingManager votingManager,
     TimeZoneUtilities timeZoneUtilities,
     ITimeTickerManager<TimeTickerEntity> ticker,
     ICronTickerManager<CronTickerEntity> cronTicker,
@@ -60,8 +61,8 @@ public class CommandHandler(
             case "/plan":
                 await HandlePlanCommand(msg);
                 break;
-            case "/save":
-                await HandleSaveCommand(msg, args);
+            case "/vote":
+                await HandleVoteCommand(msg, args);
                 break;
             case "/saved":
                 await HandleSavedCommand(msg);
@@ -89,7 +90,7 @@ public class CommandHandler(
                 /unpause - Вернуться из отшельничества
 
                 /get - Узреть расписание братства и грядущий поход
-                /save dd.mm.yyyy hh:mm - Начертать время великой битвы
+                /vote dd.mm.yyyy hh:mm - Начать голосование за запись битвы
                 /saved - Развернуть свиток начертанных битв
                 /unsave number - Стереть запись о битве
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
@@ -114,29 +115,15 @@ public class CommandHandler(
 
         if (suitableTime is not null)
         {
-            var today = timeZoneUtilities.GetMoscowDate().Add(suitableTime.Value.TimeOfDay);
+            // suitableTime is already in Moscow time from CheckIfDateIsAvailable
+            var moscowGameDateTime = suitableTime.Value;
+            var utcGameDateTime = timeZoneUtilities.ConvertToUtc(moscowGameDateTime);
             var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
             var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
 
-            var sentMessage = await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text:
-                $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{timeZoneUtilities.FormatTime(today)}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
-                parseMode: ParseMode.Html, linkPreviewOptions: true
-            );
-
-            // Create voting session and store message ID
-            var votingMessage =
-                await availabilityManager.CreateVotingSession(timeZoneUtilities.ConvertToUtc(today), sentMessage);
-            if (votingMessage is not null)
-            {
-                votingMessage.MessageId = sentMessage.MessageId;
-                await db.SaveChangesAsync();
-
-                await bot.SetMessageReaction(
-                    msg.Chat.Id,
-                    sentMessage.MessageId,
-                    [new ReactionTypeEmoji { Emoji = "👍" }]);
-            }
+            await votingManager.SendVotingMessage(
+                msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
+                msg.From!.Username!, activeMentions, keyboardGenerator);
         }
     }
 
@@ -234,26 +221,6 @@ public class CommandHandler(
             sb.AppendLine();
         }
 
-        // sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        // sb.AppendLine();
-        //
-        // DateTime nearestFittingDateTime = default;
-        // for (var i = 0; i < 12; i++)
-        // {
-        //     var moscowDate = startMoscowDate.AddDays(i).Date;
-        //     var result = await availabilityManager.CheckIfDateIsAvailable(timeZoneUtilities.ConvertToUtc(moscowDate));
-        //
-        //     if (result is null) continue;
-        //     nearestFittingDateTime = result.Value;
-        //     break;
-        // }
-        //
-        // var format = nearestFittingDateTime != default
-        //     ? timeZoneUtilities.ConvertToMoscow(nearestFittingDateTime).ToString("dd MMM (ddd) HH:mm", culture)
-        //     : "не найдено";
-        //
-        // sb.Append($"<b>Ближайшая удобная дата</b>: {format}");
-
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId, text: sb.ToString(),
             parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
@@ -278,7 +245,7 @@ public class CommandHandler(
         user.IsActive = false;
         await db.SaveChangesAsync();
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-            text: $"@{user.Username} решил уйти в монастырь. Пусть же боги будут к нему благосклонны!",
+            text: $"🏛️ {user.Name} решил уйти в монастырь. Пусть же боги будут к нему благосклонны!",
             parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["😢"]);
@@ -303,7 +270,7 @@ public class CommandHandler(
         user.IsActive = true;
         await db.SaveChangesAsync();
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-            text: $"Поприветствуем @{user.Username}, вернувшегося из отшельничества!",
+            text: $"🎉 Поприветствуем {user.Name}, вернувшегося из отшельничества!",
             parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
 
@@ -320,7 +287,7 @@ public class CommandHandler(
             replyMarkup: new InlineKeyboardMarkup(calendar));
     }
 
-    private async Task HandleSaveCommand(Message msg, string args)
+    private async Task HandleVoteCommand(Message msg, string args)
     {
         if (args == string.Empty)
         {
@@ -329,7 +296,7 @@ public class CommandHandler(
                       ⚠️ Ты забыл указать дату и час битвы!
 
                       Используй заклинание так:
-                      /save 28.01.2026 18:30
+                      /vote 28.01.2026 18:30
                       """, parseMode: ParseMode.Html,
                 linkPreviewOptions: true);
             return;
@@ -343,13 +310,30 @@ public class CommandHandler(
                       💫 Руны не поддаются прочтению!
 
                       Используй заклинание так:
-                      /save 28.01.2026 18:30
+                      /vote 28.01.2026 18:30
                       """, parseMode: ParseMode.Html,
                 linkPreviewOptions: true);
             return;
         }
 
-        await availabilityManager.SavePlannedGame(date, msg);
+        var utcGameDateTime = timeZoneUtilities.ConvertToUtc(date);
+        var now = DateTime.UtcNow;
+
+        if (utcGameDateTime < now)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ Нельзя назначить голосование за битву в прошлом!",
+                parseMode: ParseMode.Html, linkPreviewOptions: true);
+            return;
+        }
+
+        var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
+        var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
+
+        await votingManager.SendVotingMessage(
+            msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
+            msg.From!.Username!, activeMentions, keyboardGenerator);
+
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
     }
 

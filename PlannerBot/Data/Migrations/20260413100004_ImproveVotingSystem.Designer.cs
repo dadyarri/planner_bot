@@ -2,18 +2,21 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using PlannerBot.Data;
 
 #nullable disable
 
-namespace PlannerBot.DataMigrations
+namespace PlannerBot.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260413100004_ImproveVotingSystem")]
+    partial class ImproveVotingSystem
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -96,9 +99,6 @@ namespace PlannerBot.DataMigrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
 
-                    b.Property<int>("AgainstCount")
-                        .HasColumnType("integer");
-
                     b.Property<long>("ChatId")
                         .HasColumnType("bigint");
 
@@ -119,9 +119,6 @@ namespace PlannerBot.DataMigrations
                     b.Property<int>("MessageId")
                         .HasColumnType("integer");
 
-                    b.Property<int>("Outcome")
-                        .HasColumnType("integer");
-
                     b.Property<int>("ThreadId")
                         .HasColumnType("integer");
 
@@ -140,9 +137,6 @@ namespace PlannerBot.DataMigrations
                         .HasColumnType("bigint");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<int>("Type")
-                        .HasColumnType("integer");
 
                     b.Property<long>("UserId")
                         .HasColumnType("bigint");

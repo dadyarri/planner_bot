@@ -41,5 +41,7 @@ public class VoteSession
     public DateTime? ExpiresAt { get; set; }
     [MaxLength(32)]
     public string CreatorUsername { get; set; } = string.Empty;
+    public int CampaignId { get; set; }
+    public Campaign Campaign { get; set; } = null!;
     public List<VoteSessionVote> Votes { get; set; } = [];
 }

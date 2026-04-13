@@ -39,7 +39,7 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
         // Exclude users who voted against this time slot
         var voteSession = await db.VoteSessions
             .Include(vs => vs.Votes)
-            .FirstOrDefaultAsync(vs => vs.GameDateTime.Date == savedGame.DateTime.Date, cancellationToken);
+            .FirstOrDefaultAsync(vs => vs.GameDateTime == savedGame.DateTime, cancellationToken);
 
         if (voteSession is not null)
         {

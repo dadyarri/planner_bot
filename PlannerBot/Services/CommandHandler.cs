@@ -120,26 +120,9 @@ public class CommandHandler(
             var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
             var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
 
-            var sentMessage = await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text:
-                $"⚔️ Совет братства решает! {timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 — Поддержать запись битвы в летописи\n👎 — Отклонить этот час (вас исключат из напоминаний)\n\n{activeMentions}",
-                parseMode: ParseMode.Html, linkPreviewOptions: true,
-                replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateVoteCancelKeyboard(msg.From!.Username!))
-            );
-
-            // Create voting session and store message ID
-            var votingSession =
-                await availabilityManager.CreateVotingSession(utcGameDateTime, sentMessage, msg.From!.Username!);
-            if (votingSession is not null)
-            {
-                votingSession.MessageId = sentMessage.MessageId;
-                await db.SaveChangesAsync();
-
-                await bot.SetMessageReaction(
-                    msg.Chat.Id,
-                    sentMessage.MessageId,
-                    [new ReactionTypeEmoji { Emoji = "👍" }]);
-            }
+            await availabilityManager.SendVotingMessage(
+                msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
+                msg.From!.Username!, activeMentions, keyboardGenerator);
         }
     }
 
@@ -345,26 +328,10 @@ public class CommandHandler(
 
         var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
         var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
-        var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(utcGameDateTime);
 
-        var sentMessage = await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-            text:
-            $"⚔️ Совет братства решает! {timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 — Поддержать запись битвы в летописи\n👎 — Отклонить этот час (вас исключат из напоминаний)\n\n{activeMentions}",
-            parseMode: ParseMode.Html, linkPreviewOptions: true,
-            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateVoteCancelKeyboard(msg.From!.Username!)));
-
-        var votingSession =
-            await availabilityManager.CreateVotingSession(utcGameDateTime, sentMessage, msg.From!.Username!);
-        if (votingSession is not null)
-        {
-            votingSession.MessageId = sentMessage.MessageId;
-            await db.SaveChangesAsync();
-
-            await bot.SetMessageReaction(
-                msg.Chat.Id,
-                sentMessage.MessageId,
-                [new ReactionTypeEmoji { Emoji = "👍" }]);
-        }
+        await availabilityManager.SendVotingMessage(
+            msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
+            msg.From!.Username!, activeMentions, keyboardGenerator);
 
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
     }

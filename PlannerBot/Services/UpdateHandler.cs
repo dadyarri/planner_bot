@@ -187,12 +187,13 @@ public partial class UpdateHandler(
                             var moscowGameDateTime = suitableTime.Value;
                             var utcGameDateTime = timeZoneUtilities.ConvertToUtc(moscowGameDateTime);
 
-                            await SendVotingMessage(
+                            await availabilityManager.SendVotingMessage(
                                 callbackQuery.Message!.Chat.Id,
                                 callbackQuery.Message.MessageThreadId,
                                 utcGameDateTime,
                                 callbackQuery.From.Username!,
-                                activeMentions);
+                                activeMentions,
+                                keyboardGenerator);
                         }
                     }
 
@@ -231,40 +232,6 @@ public partial class UpdateHandler(
         }
 
         await bot.AnswerCallbackQuery(callbackQuery.Id);
-    }
-
-    /// <summary>
-    /// Sends a new voting message and creates the associated voting session.
-    /// This is the single place that creates voting messages — used by both
-    /// the "delete" callback (plan completion) and the /vote command.
-    /// </summary>
-    private async Task SendVotingMessage(
-        long chatId,
-        int? threadId,
-        DateTime utcGameDateTime,
-        string creatorUsername,
-        string activeMentions)
-    {
-        var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(utcGameDateTime);
-        var sentMessage = await bot.SendMessage(chatId,
-            messageThreadId: threadId,
-            text:
-            $"⚔️ Совет братства решает! {timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 — Поддержать запись битвы в летописи\n👎 — Отклонить этот час (вас исключат из напоминаний)\n\n{activeMentions}",
-            parseMode: ParseMode.Html, linkPreviewOptions: true,
-            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateVoteCancelKeyboard(creatorUsername)));
-
-        var votingSession = await availabilityManager.CreateVotingSession(
-            utcGameDateTime, sentMessage, creatorUsername);
-        if (votingSession is not null)
-        {
-            votingSession.MessageId = sentMessage.MessageId;
-            await db.SaveChangesAsync();
-
-            await bot.SetMessageReaction(
-                chatId,
-                sentMessage.MessageId,
-                [new ReactionTypeEmoji { Emoji = "👍" }]);
-        }
     }
 
     private async Task OnMessageReaction(MessageReactionUpdated reactionUpdated)

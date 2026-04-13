@@ -414,6 +414,13 @@ public class AvailabilityManager
     }
 
     /// <summary>
+    /// Calculates the minimum number of against votes needed to declare no consensus.
+    /// Currently: majority rule — more than half of active users must vote against.
+    /// </summary>
+    private static int MinimumAgainstVotesForNoConsensus(int activeUsersCount) =>
+        (activeUsersCount + 1) / 2;
+
+    /// <summary>
     /// Evaluates whether the voting session has reached a final outcome.
     /// Threshold: all active users voted FOR. No-consensus: against votes >= half of active users.
     /// </summary>
@@ -433,8 +440,8 @@ public class AvailabilityManager
         if (session.VoteCount >= activeUsersCount)
             return VoteOutcome.Saved;
 
-        // Against votes >= half of active users — no consensus
-        if (session.AgainstCount > 0 && session.AgainstCount >= (activeUsersCount + 1) / 2)
+        // Against votes >= minimum threshold — no consensus
+        if (session.AgainstCount > 0 && session.AgainstCount >= MinimumAgainstVotesForNoConsensus(activeUsersCount))
             return VoteOutcome.NoConsensus;
 
         return VoteOutcome.Pending;
@@ -509,6 +516,39 @@ public class AvailabilityManager
         await _db.VoteSessions
             .Where(vs => vs.Id == votingSessionId)
             .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.Outcome, outcome));
+    }
+
+    /// <summary>
+    /// Sends a voting message to a chat, creates the voting session, and sets the initial reaction.
+    /// This is the single shared method for creating voting messages from any entry point.
+    /// </summary>
+    public async Task SendVotingMessage(
+        long chatId,
+        int? threadId,
+        DateTime utcGameDateTime,
+        string creatorUsername,
+        string activeMentions,
+        KeyboardGenerator keyboard)
+    {
+        var moscowGameDateTime = _timeZoneUtilities.ConvertToMoscow(utcGameDateTime);
+        var sentMessage = await _bot.SendMessage(chatId,
+            messageThreadId: threadId,
+            text:
+            $"⚔️ Совет братства решает! {_timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{_timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 — Поддержать запись битвы в летописи\n👎 — Отклонить этот час (вас исключат из напоминаний)\n\n{activeMentions}",
+            parseMode: ParseMode.Html, linkPreviewOptions: true,
+            replyMarkup: new InlineKeyboardMarkup(keyboard.GenerateVoteCancelKeyboard(creatorUsername)));
+
+        var votingSession = await CreateVotingSession(utcGameDateTime, sentMessage, creatorUsername);
+        if (votingSession is not null)
+        {
+            votingSession.MessageId = sentMessage.MessageId;
+            await _db.SaveChangesAsync();
+
+            await _bot.SetMessageReaction(
+                chatId,
+                sentMessage.MessageId,
+                [new ReactionTypeEmoji { Emoji = "👍" }]);
+        }
     }
 
     /// <summary>

@@ -362,6 +362,103 @@ public partial class UpdateHandler(
 
                     break;
                 }
+            case CallbackActions.StealCampaign:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[2]);
+                    if (user is null) return;
+
+                    // Verify DM ownership
+                    var campaign = await db.Campaigns
+                        .Include(c => c.ForumThread)
+                        .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                    if (campaign is null)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Только Мастер Подземелий может призвать /steal!",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    // Delete the campaign picker message and show slot picker
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    var fakeMsg = new Message
+                    {
+                        Chat = callbackQuery.Message.Chat,
+                        MessageThreadId = callbackQuery.Message.MessageThreadId
+                    };
+                    await commandHandler.ShowSlotPickerForCampaign(fakeMsg, campaignId, user.Username);
+
+                    break;
+                }
+            case CallbackActions.StealSlot:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var slotUtc = DateTime.Parse(split[2], null, System.Globalization.DateTimeStyles.RoundtripKind);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[3]);
+                    if (user is null) return;
+
+                    // Load campaign with thread and members
+                    var campaign = await db.Campaigns
+                        .Include(c => c.ForumThread)
+                        .Include(c => c.Members)
+                        .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                    if (campaign is null)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Только Мастер Подземелий может призвать /steal!",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    // Build mentions from campaign members
+                    var memberUserIds = campaign.Members.Select(m => m.UserId).ToHashSet();
+                    var memberUsers = await db.Users
+                        .Where(u => memberUserIds.Contains(u.Id))
+                        .ToListAsync();
+                    var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
+
+                    // Delete the slot picker message
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+
+                    // Send voting message in the campaign's thread
+                    await votingManager.SendVotingMessage(
+                        campaign.ForumThread.ChatId,
+                        campaign.ForumThread.ThreadId,
+                        slotUtc,
+                        user.Username,
+                        activeMentions,
+                        keyboardGenerator,
+                        campaignId);
+
+                    break;
+                }
         }
 
         await bot.AnswerCallbackQuery(callbackQuery.Id);

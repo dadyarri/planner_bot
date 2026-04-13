@@ -32,4 +32,10 @@ public static class CallbackActions
 
     /// <summary>DM selected a campaign from the campaign picker to delete.</summary>
     public const string CampaignDelete = "cdelete";
+
+    /// <summary>DM selected a campaign from the campaign picker for /steal (service thread flow).</summary>
+    public const string StealCampaign = "steal_camp";
+
+    /// <summary>DM selected an available slot from the slot picker for /steal.</summary>
+    public const string StealSlot = "steal_slot";
 }

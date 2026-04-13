@@ -89,6 +89,9 @@ public class CommandHandler(
             case "/service_thread":
                 await HandleServiceThreadCommand(msg);
                 break;
+            case "/steal":
+                await HandleStealCommand(msg);
+                break;
         }
     }
 
@@ -116,6 +119,7 @@ public class CommandHandler(
                 /campaign_leave - Покинуть ряды кампании
                 /campaign_delete - Завершить кампанию (только Мастер)
                 /service_thread - Пометить поток как служебный
+                /steal - Захватить свободный слот для битвы (только Мастер)
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
     }
@@ -336,12 +340,22 @@ public class CommandHandler(
             return;
         }
 
+        // Resolve campaign from current thread
+        var campaign = await campaignManager.ResolveCampaignFromContext(msg.Chat.Id, msg.MessageThreadId);
+        if (campaign is null)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ Эту команду можно использовать только в потоке кампании.",
+                parseMode: ParseMode.Html, linkPreviewOptions: true);
+            return;
+        }
+
         var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
         var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
 
         await votingManager.SendVotingMessage(
             msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
-            msg.From!.Username!, activeMentions, keyboardGenerator);
+            msg.From!.Username!, activeMentions, keyboardGenerator, campaign.Id);
 
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
     }
@@ -639,6 +653,78 @@ public class CommandHandler(
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: text, parseMode: ParseMode.Html);
+    }
+
+    private async Task HandleStealCommand(Message msg)
+    {
+        var user = await EnsureUser(msg);
+
+        // In a campaign thread — show slots for that campaign (DM-only)
+        if (msg.MessageThreadId is not null)
+        {
+            var campaign = await campaignManager.ResolveCampaignFromContext(
+                msg.Chat.Id, msg.MessageThreadId);
+
+            if (campaign is not null)
+            {
+                if (campaign.DungeonMasterId != user.Id)
+                {
+                    await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                        text: "⚠️ Только Мастер Подземелий может призвать /steal!",
+                        parseMode: ParseMode.Html);
+                    return;
+                }
+
+                await ShowSlotPickerForCampaign(msg, campaign.Id, user.Username);
+                return;
+            }
+        }
+
+        // Service thread or unknown thread — show campaign picker filtered to DM campaigns
+        var dmCampaigns = await campaignManager.GetDmCampaigns(user.Id);
+        if (dmCampaigns.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ У тебя нет кампаний, которыми ты управляешь.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
+            CallbackActions.StealCampaign, dmCampaigns, msg.From!.Username!);
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: "🎯 Выбери кампанию, для которой хочешь захватить слот:",
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
+    }
+
+    /// <summary>
+    /// Shows the slot picker for a campaign, filtering out past slots.
+    /// Shared between the campaign thread flow and the service thread callback.
+    /// </summary>
+    internal async Task ShowSlotPickerForCampaign(Message msg, int campaignId, string username)
+    {
+        var now = DateTime.UtcNow;
+        var slots = await db.AvailableSlots
+            .Where(s => s.CampaignId == campaignId && s.DateTime > now)
+            .OrderBy(s => s.DateTime)
+            .ToListAsync();
+
+        if (slots.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ Свободных слотов не найдено. Попроси игроков заполнить /plan.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        var keyboard = keyboardGenerator.GenerateSlotPickerKeyboard(campaignId, slots, username);
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: "🎲 Выбери свободный слот для битвы:",
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
     }
 
     /// <summary>

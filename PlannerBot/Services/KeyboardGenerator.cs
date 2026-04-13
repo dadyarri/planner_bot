@@ -177,4 +177,27 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
         return buttons;
     }
+
+    /// <summary>
+    /// Generates a slot picker keyboard for /steal.
+    /// Each button shows the slot date/time in Moscow time and embeds campaign ID, slot UTC, and username.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateSlotPickerKeyboard(
+        int campaignId, IReadOnlyList<AvailableSlot> slots, string username)
+    {
+        var buttons = slots
+            .Select(s =>
+            {
+                var moscow = timeZoneUtilities.ConvertToMoscow(s.DateTime);
+                return new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        $"🗓️ {timeZoneUtilities.FormatDateTime(moscow)}",
+                        $"{CallbackActions.StealSlot};{campaignId};{s.DateTime:O};{username}")
+                };
+            })
+            .ToArray();
+
+        return buttons;
+    }
 }

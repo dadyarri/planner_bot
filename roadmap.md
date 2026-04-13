@@ -15,12 +15,11 @@ Support multiple D&D campaigns within the same Telegram group chat. Each campaig
 | `Id` | int, PK | |
 | `DungeonMasterId` | long, FK → User | The DM who created and runs this campaign |
 | `ChatId` | long | Telegram chat ID |
-| `ThreadId` | int | Dedicated Telegram thread for this campaign (thread name = campaign name) |
-| `Name` | string | Cached thread name (= campaign name), updated on campaign creation and optionally refreshed |
+| `ForumThreadId` | int, FK → ForumThread | Link to the tracked forum thread (thread name = campaign name) |
 | `IsActive` | bool | Soft-delete flag |
 | `CreatedAt` | DateTime | |
 
-Campaign name is cached in the `Name` column (copied from the thread name at creation time) to avoid repeated Telegram API calls to resolve the thread name.
+Campaign name is resolved via the linked `ForumThread.Name` — no cached copy needed since thread info is stored locally.
 
 #### New Entity: `CampaignMember`
 
@@ -38,11 +37,10 @@ Unique constraint on `(CampaignId, UserId)`. The global `IsActive` flag on `User
 |--------|------|-------------|
 | `Id` | int, PK | |
 | `ChatId` | long | Telegram chat ID |
-| `ThreadId` | int | Thread marked as service (not tied to any campaign) |
+| `ForumThreadId` | int, FK → ForumThread | Reference to the tracked forum thread |
 
 #### Modified Entities
 
-- **Response** — no changes. Responses are global and not tied to any campaign.
 - **SavedGame** — add `CampaignId` (FK → Campaign, **not null**) for per-campaign scoping.
 - **VoteSession** — add `CampaignId` (FK → Campaign, **not null**) for per-campaign scoping.
 
@@ -64,7 +62,7 @@ Before creating a voting session, check `SavedGame` for existing games on the sa
 The Telegram Bot API does not provide a direct way to list or query threads in a chat. To work around this, the bot must track threads itself by listening to forum topic service messages on the `Message` update:
 
 - `forum_topic_created` — a new thread was created. Store `ThreadId` and topic name.
-- `forum_topic_edited` — a thread was renamed. Update the cached `Name` on `Campaign` (if linked) and on the `ForumThread` entity.
+- `forum_topic_edited` — a thread was renamed. Update `ForumThread.Name` (campaigns linked via FK see the change automatically).
 - `forum_topic_closed` — a thread was closed. Mark it accordingly.
 - `forum_topic_reopened` — a thread was reopened. Clear the closed flag.
 
@@ -80,13 +78,13 @@ This requires a new entity to store thread metadata separately from campaigns:
 | `Name` | string | Thread name (from `forum_topic_created` / `forum_topic_edited`) |
 | `IsClosed` | bool | Whether the thread is currently closed |
 
-The `Campaign.Name` column is populated from `ForumThread.Name` at campaign creation and updated when a `forum_topic_edited` event fires for the linked thread. This avoids any direct Telegram API calls to resolve thread names.
+The `Campaign` table links to `ForumThread` via `ForumThreadId` FK — campaign name is always resolved from `ForumThread.Name`, no duplication needed. When a `forum_topic_edited` event fires, only the `ForumThread` record is updated, and all linked campaigns automatically see the new name.
 
-The `UpdateHandler` must route these service messages to a handler that upserts `ForumThread` records and syncs `Campaign.Name` when applicable.
+The `UpdateHandler` must route these service messages to a handler that upserts `ForumThread` records.
 
 #### 4. Thread Routing & Service Threads
 
-- Each campaign is tied to one Telegram thread. Campaign name = thread name (cached via `ForumThread`).
+- Each campaign is tied to one Telegram thread via `ForumThreadId` FK. Campaign name = `ForumThread.Name`.
 - Use `/service_thread` to mark the current thread as a **service thread** — not related to any campaign. Service threads are used for general coordination (e.g., main chat or an admin thread).
 - Refuse to create a campaign in a service thread.
 

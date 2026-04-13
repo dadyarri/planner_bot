@@ -268,24 +268,8 @@ public partial class UpdateHandler(
             case CallbackActions.CampaignJoin:
                 {
                     var campaignId = int.Parse(split[1]);
-                    var username = split[2];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id,
-                            "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
-
-                    var user = await db.Users.FirstOrDefaultAsync(
-                        u => u.Username == callbackQuery.From.Username);
-
-                    if (user is null)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id,
-                            "⚠️ Сначала зарегистрируйся командой /unpause");
-                        return;
-                    }
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[2]);
+                    if (user is null) return;
 
                     var joinError = await campaignManager.JoinCampaign(campaignId, user.Id);
                     var joinResultText = joinError ?? $"⚔️ {user.Name} вступает в ряды кампании!";
@@ -301,24 +285,8 @@ public partial class UpdateHandler(
             case CallbackActions.CampaignLeave:
                 {
                     var campaignId = int.Parse(split[1]);
-                    var username = split[2];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id,
-                            "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
-
-                    var user = await db.Users.FirstOrDefaultAsync(
-                        u => u.Username == callbackQuery.From.Username);
-
-                    if (user is null)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id,
-                            "⚠️ Сначала зарегистрируйся командой /unpause");
-                        return;
-                    }
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[2]);
+                    if (user is null) return;
 
                     var leaveError = await campaignManager.LeaveCampaign(campaignId, user.Id);
                     var leaveResultText = leaveError ?? $"👋 {user.Name} покидает ряды кампании.";
@@ -334,24 +302,8 @@ public partial class UpdateHandler(
             case CallbackActions.CampaignDelete:
                 {
                     var campaignId = int.Parse(split[1]);
-                    var username = split[2];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id,
-                            "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
-
-                    var user = await db.Users.FirstOrDefaultAsync(
-                        u => u.Username == callbackQuery.From.Username);
-
-                    if (user is null)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id,
-                            "⚠️ Сначала зарегистрируйся командой /unpause");
-                        return;
-                    }
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[2]);
+                    if (user is null) return;
 
                     var deleteError = await campaignManager.DeleteCampaign(campaignId, user.Id);
                     var deleteResultText = deleteError ?? "📕 Кампания завершена — летопись запечатана.";
@@ -523,5 +475,31 @@ public partial class UpdateHandler(
     {
         LogUnknownUpdateTypeUpdatetype(logger, update.Type);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Validates callback ownership and resolves the user from the database.
+    /// Returns null and sends an appropriate callback answer if validation fails.
+    /// </summary>
+    private async Task<Data.User?> ValidateCallbackOwnerAndResolveUser(
+        CallbackQuery callbackQuery, string expectedUsername)
+    {
+        if (expectedUsername != callbackQuery.From.Username)
+        {
+            await bot.AnswerCallbackQuery(callbackQuery.Id,
+                "🚨 Эта кнопка защищена древним проклятием!");
+            return null;
+        }
+
+        var user = await db.Users.FirstOrDefaultAsync(
+            u => u.Username == callbackQuery.From.Username);
+
+        if (user is null)
+        {
+            await bot.AnswerCallbackQuery(callbackQuery.Id,
+                "⚠️ Сначала зарегистрируйся командой /unpause");
+        }
+
+        return user;
     }
 }

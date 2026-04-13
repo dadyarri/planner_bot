@@ -110,6 +110,7 @@ public class CommandHandler(
                 /saved - Развернуть свиток начертанных битв
                 /unsave number - Стереть запись о битве
 
+                <b>🏰 Управление кампаниями:</b>
                 /campaign_new - Основать новую кампанию в этом потоке
                 /campaign_join - Вступить в ряды кампании
                 /campaign_leave - Покинуть ряды кампании

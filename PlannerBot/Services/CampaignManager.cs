@@ -213,6 +213,9 @@ public class CampaignManager(AppDbContext db, ILogger<CampaignManager> logger)
 
     /// <summary>
     /// Returns whether the given thread is a service thread.
+    /// Null threadId (main chat with no thread) and unknown threads (not yet tracked
+    /// via forum topic service messages) are treated as service threads by default,
+    /// because campaign commands should only work in explicitly tracked campaign threads.
     /// </summary>
     public async Task<bool> IsServiceThread(long chatId, int? threadId)
     {

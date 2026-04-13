@@ -415,7 +415,7 @@ public class AvailabilityManager
 
     /// <summary>
     /// Calculates the minimum number of against votes needed to declare no consensus.
-    /// Currently: majority rule — more than half of active users must vote against.
+    /// Currently: at least half of active users must vote against.
     /// </summary>
     private static int MinimumAgainstVotesForNoConsensus(int activeUsersCount) =>
         (activeUsersCount + 1) / 2;
@@ -441,7 +441,7 @@ public class AvailabilityManager
             return VoteOutcome.Saved;
 
         // Against votes >= minimum threshold — no consensus
-        if (session.AgainstCount > 0 && session.AgainstCount >= MinimumAgainstVotesForNoConsensus(activeUsersCount))
+        if (session.AgainstCount >= MinimumAgainstVotesForNoConsensus(activeUsersCount))
             return VoteOutcome.NoConsensus;
 
         return VoteOutcome.Pending;

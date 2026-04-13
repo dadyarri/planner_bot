@@ -363,9 +363,13 @@ public partial class UpdateHandler(
                                 replyMarkup: new InlineKeyboardMarkup(
                                     keyboardGenerator.GenerateVoteCancelKeyboard(updatedSession.CreatorUsername)));
                         }
-                        catch (ApiRequestException)
+                        catch (ApiRequestException ex) when (ex.Message.Contains("message is not modified"))
                         {
                             // Message content unchanged — Telegram API throws if text is identical
+                        }
+                        catch (ApiRequestException ex)
+                        {
+                            logger.LogWarning(ex, "Failed to update voting message");
                         }
                     }
 

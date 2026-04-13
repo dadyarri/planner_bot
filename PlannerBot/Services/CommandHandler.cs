@@ -26,6 +26,7 @@ public class CommandHandler(
     AvailabilityManager availabilityManager,
     VotingManager votingManager,
     TimeZoneUtilities timeZoneUtilities,
+    CampaignManager campaignManager,
     ITimeTickerManager<TimeTickerEntity> ticker,
     ICronTickerManager<CronTickerEntity> cronTicker,
     ILogger<UpdateHandler> logger)
@@ -73,6 +74,21 @@ public class CommandHandler(
             case "/weekly":
                 await HandleWeeklyCommand(msg);
                 break;
+            case "/campaign_new":
+                await HandleCampaignNewCommand(msg);
+                break;
+            case "/campaign_join":
+                await HandleCampaignJoinCommand(msg);
+                break;
+            case "/campaign_leave":
+                await HandleCampaignLeaveCommand(msg);
+                break;
+            case "/campaign_delete":
+                await HandleCampaignDeleteCommand(msg);
+                break;
+            case "/service_thread":
+                await HandleServiceThreadCommand(msg);
+                break;
         }
     }
 
@@ -93,6 +109,12 @@ public class CommandHandler(
                 /vote dd.mm.yyyy hh:mm - Начать голосование за запись битвы
                 /saved - Развернуть свиток начертанных битв
                 /unsave number - Стереть запись о битве
+
+                /campaign_new - Основать новую кампанию в этом потоке
+                /campaign_join - Вступить в ряды кампании
+                /campaign_leave - Покинуть ряды кампании
+                /campaign_delete - Завершить кампанию (только Мастер)
+                /service_thread - Пометить поток как служебный
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
     }
@@ -421,5 +443,223 @@ public class CommandHandler(
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "❌ Чёрная магия помешала - глас не смог явиться на зов");
         }
+    }
+
+    private async Task HandleCampaignNewCommand(Message msg)
+    {
+        if (msg.MessageThreadId is null)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ Эту команду можно использовать только в потоке форума.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        var user = await EnsureUser(msg);
+        var (campaign, error) = await campaignManager.CreateCampaign(
+            msg.Chat.Id, msg.MessageThreadId.Value, user.Id);
+
+        if (error is not null)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: error, parseMode: ParseMode.Html);
+            return;
+        }
+
+        // Auto-join the DM as a member
+        await campaignManager.JoinCampaign(campaign!.Id, user.Id);
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: $"🏰 Кампания основана! {user.Name} встаёт за ширму Мастера Подземелий.",
+            parseMode: ParseMode.Html);
+    }
+
+    private async Task HandleCampaignJoinCommand(Message msg)
+    {
+        var user = await EnsureUser(msg);
+
+        // If in a campaign thread, join that campaign directly
+        if (msg.MessageThreadId is not null)
+        {
+            var campaign = await campaignManager.ResolveCampaignFromContext(
+                msg.Chat.Id, msg.MessageThreadId);
+
+            if (campaign is not null)
+            {
+                var error = await campaignManager.JoinCampaign(campaign.Id, user.Id);
+                if (error is not null)
+                {
+                    await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                        text: error, parseMode: ParseMode.Html);
+                    return;
+                }
+
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: $"⚔️ {user.Name} вступает в ряды кампании!",
+                    parseMode: ParseMode.Html);
+                return;
+            }
+        }
+
+        // Service thread or unknown thread — show campaign picker
+        var campaigns = await campaignManager.GetActiveCampaigns(msg.Chat.Id);
+        if (campaigns.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ В этом чате нет активных кампаний.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
+            CallbackActions.CampaignJoin, campaigns, msg.From!.Username!);
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: "⚔️ Выбери кампанию, в которую хочешь вступить:",
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
+    }
+
+    private async Task HandleCampaignLeaveCommand(Message msg)
+    {
+        var user = await EnsureUser(msg);
+
+        // If in a campaign thread, leave that campaign directly
+        if (msg.MessageThreadId is not null)
+        {
+            var campaign = await campaignManager.ResolveCampaignFromContext(
+                msg.Chat.Id, msg.MessageThreadId);
+
+            if (campaign is not null)
+            {
+                var error = await campaignManager.LeaveCampaign(campaign.Id, user.Id);
+                if (error is not null)
+                {
+                    await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                        text: error, parseMode: ParseMode.Html);
+                    return;
+                }
+
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: $"👋 {user.Name} покидает ряды кампании.",
+                    parseMode: ParseMode.Html);
+                return;
+            }
+        }
+
+        // Service thread or unknown thread — show campaign picker (user's campaigns)
+        var campaigns = await campaignManager.GetUserCampaigns(user.Id);
+        if (campaigns.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ Ты не состоишь ни в одной кампании.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
+            CallbackActions.CampaignLeave, campaigns, msg.From!.Username!);
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: "👋 Выбери кампанию, которую хочешь покинуть:",
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
+    }
+
+    private async Task HandleCampaignDeleteCommand(Message msg)
+    {
+        var user = await EnsureUser(msg);
+
+        // If in a campaign thread, delete that campaign directly (DM-only)
+        if (msg.MessageThreadId is not null)
+        {
+            var campaign = await campaignManager.ResolveCampaignFromContext(
+                msg.Chat.Id, msg.MessageThreadId);
+
+            if (campaign is not null)
+            {
+                var error = await campaignManager.DeleteCampaign(campaign.Id, user.Id);
+                if (error is not null)
+                {
+                    await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                        text: error, parseMode: ParseMode.Html);
+                    return;
+                }
+
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: "📕 Кампания завершена — летопись запечатана.",
+                    parseMode: ParseMode.Html);
+                return;
+            }
+        }
+
+        // Service thread — show DM's campaigns
+        var campaigns = await campaignManager.GetDmCampaigns(user.Id);
+        if (campaigns.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ У тебя нет активных кампаний для завершения.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
+            CallbackActions.CampaignDelete, campaigns, msg.From!.Username!);
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: "📕 Выбери кампанию для завершения:",
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
+    }
+
+    private async Task HandleServiceThreadCommand(Message msg)
+    {
+        if (msg.MessageThreadId is null)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ Эту команду можно использовать только в потоке форума.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        var (isServiceThread, error) = await campaignManager.ToggleServiceThread(
+            msg.Chat.Id, msg.MessageThreadId.Value);
+
+        if (error is not null)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: error, parseMode: ParseMode.Html);
+            return;
+        }
+
+        var text = isServiceThread
+            ? "📜 Этот поток отныне служебный — канцелярия Мастеров."
+            : "⚔️ Служебная метка снята — поток свободен для кампаний.";
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: text, parseMode: ParseMode.Html);
+    }
+
+    /// <summary>
+    /// Ensures the user exists in the database. Creates if not found.
+    /// </summary>
+    private async Task<User> EnsureUser(Message msg)
+    {
+        var user = await db.Users
+            .FirstOrDefaultAsync(u => u.Username == msg.From!.Username);
+
+        if (user is not null)
+            return user;
+
+        user = new User
+        {
+            Username = msg.From!.Username ?? throw new UnreachableException(),
+            Name = $"{msg.From!.FirstName} {msg.From!.LastName}".Trim(),
+            IsActive = true
+        };
+        await db.Users.AddAsync(user);
+        await db.SaveChangesAsync();
+
+        return user;
     }
 }

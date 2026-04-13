@@ -158,4 +158,23 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
             ]
         ];
     }
+
+    /// <summary>
+    /// Generates a campaign picker keyboard for the given action and campaigns.
+    /// Each button shows the campaign name (from linked ForumThread) and embeds campaign ID + username.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateCampaignPickerKeyboard(
+        string action, IReadOnlyList<Campaign> campaigns, string username)
+    {
+        var buttons = campaigns
+            .Select(c => new[]
+            {
+                InlineKeyboardButton.WithCallbackData(
+                    $"⚔️ {c.ForumThread.Name}",
+                    $"{action};{c.Id};{username}")
+            })
+            .ToArray();
+
+        return buttons;
+    }
 }

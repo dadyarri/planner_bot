@@ -23,4 +23,13 @@ public static class CallbackActions
 
     /// <summary>Creator pressed the cancel button on a voting session.</summary>
     public const string VoteCancel = "vote_cancel";
+
+    /// <summary>User selected a campaign from the campaign picker to join.</summary>
+    public const string CampaignJoin = "cjoin";
+
+    /// <summary>User selected a campaign from the campaign picker to leave.</summary>
+    public const string CampaignLeave = "cleave";
+
+    /// <summary>DM selected a campaign from the campaign picker to delete.</summary>
+    public const string CampaignDelete = "cdelete";
 }

@@ -25,6 +25,7 @@ public partial class UpdateHandler(
     CommandHandler commandHandler,
     SlotCalculator slotCalculator,
     ForumThreadTracker forumThreadTracker,
+    CampaignManager campaignManager,
     AppDbContext db) : IUpdateHandler
 {
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
@@ -260,6 +261,105 @@ public partial class UpdateHandler(
                         callbackQuery.Message!.Chat.Id,
                         callbackQuery.Message.Id,
                         "🛑 Голосование отменено создателем — совет распущен",
+                        parseMode: ParseMode.Html);
+
+                    break;
+                }
+            case CallbackActions.CampaignJoin:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var username = split[2];
+
+                    if (username != callbackQuery.From.Username)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Эта кнопка защищена древним проклятием!");
+                        return;
+                    }
+
+                    var user = await db.Users.FirstOrDefaultAsync(
+                        u => u.Username == callbackQuery.From.Username);
+
+                    if (user is null)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Сначала зарегистрируйся командой /unpause");
+                        return;
+                    }
+
+                    var joinError = await campaignManager.JoinCampaign(campaignId, user.Id);
+                    var joinResultText = joinError ?? $"⚔️ {user.Name} вступает в ряды кампании!";
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        joinResultText,
+                        parseMode: ParseMode.Html);
+
+                    break;
+                }
+            case CallbackActions.CampaignLeave:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var username = split[2];
+
+                    if (username != callbackQuery.From.Username)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Эта кнопка защищена древним проклятием!");
+                        return;
+                    }
+
+                    var user = await db.Users.FirstOrDefaultAsync(
+                        u => u.Username == callbackQuery.From.Username);
+
+                    if (user is null)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Сначала зарегистрируйся командой /unpause");
+                        return;
+                    }
+
+                    var leaveError = await campaignManager.LeaveCampaign(campaignId, user.Id);
+                    var leaveResultText = leaveError ?? $"👋 {user.Name} покидает ряды кампании.";
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        leaveResultText,
+                        parseMode: ParseMode.Html);
+
+                    break;
+                }
+            case CallbackActions.CampaignDelete:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var username = split[2];
+
+                    if (username != callbackQuery.From.Username)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Эта кнопка защищена древним проклятием!");
+                        return;
+                    }
+
+                    var user = await db.Users.FirstOrDefaultAsync(
+                        u => u.Username == callbackQuery.From.Username);
+
+                    if (user is null)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Сначала зарегистрируйся командой /unpause");
+                        return;
+                    }
+
+                    var deleteError = await campaignManager.DeleteCampaign(campaignId, user.Id);
+                    var deleteResultText = deleteError ?? "📕 Кампания завершена — летопись запечатана.";
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        deleteResultText,
                         parseMode: ParseMode.Html);
 
                     break;

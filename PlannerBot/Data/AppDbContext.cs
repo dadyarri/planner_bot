@@ -13,6 +13,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<VoteSession> VoteSessions { get; set; }
     public DbSet<VoteSessionVote> VoteSessionVotes { get; set; }
     public DbSet<ForumThread> ForumThreads { get; set; }
+    public DbSet<Campaign> Campaigns { get; set; }
+    public DbSet<CampaignMember> CampaignMembers { get; set; }
+    public DbSet<ServiceThread> ServiceThreads { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -24,6 +27,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         modelBuilder.Entity<ForumThread>()
             .HasIndex(ft => new { ft.ChatId, ft.ThreadId })
+            .IsUnique();
+
+        modelBuilder.Entity<CampaignMember>()
+            .HasKey(cm => new { cm.CampaignId, cm.UserId });
+
+        modelBuilder.Entity<CampaignMember>()
+            .HasIndex(cm => new { cm.CampaignId, cm.UserId })
+            .IsUnique();
+
+        modelBuilder.Entity<ServiceThread>()
+            .HasIndex(st => st.ForumThreadId)
             .IsUnique();
 
         modelBuilder.ApplyConfiguration(new TimeTickerConfigurations<TimeTickerEntity>());

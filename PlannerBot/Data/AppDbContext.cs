@@ -16,6 +16,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Campaign> Campaigns { get; set; }
     public DbSet<CampaignMember> CampaignMembers { get; set; }
     public DbSet<ServiceThread> ServiceThreads { get; set; }
+    public DbSet<AvailableSlot> AvailableSlots { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

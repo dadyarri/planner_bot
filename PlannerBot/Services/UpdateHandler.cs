@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using PlannerBot.Data;
 using Telegram.Bot;
@@ -208,29 +209,74 @@ public partial class UpdateHandler(
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                     await availabilityManager.SetUnavailableForUnmarkedDays(callbackQuery.From.Username);
 
-                    var now = DateTime.UtcNow;
-                    var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
-                    var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
+                    // Compute per-campaign free slots
+                    var slotsPerCampaign = await slotCalculator.GetAvailableSlotsForAllCampaigns();
 
-                    for (var i = 0; i < 8; i++)
+                    // Cache results — full replacement per campaign
+                    var computedAt = DateTime.UtcNow;
+                    foreach (var (campaign, slots) in slotsPerCampaign)
                     {
-                        var date = now.AddDays(i).Date;
-                        var suitableTime = await slotCalculator.CheckIfDateIsAvailable(date);
+                        // Delete old cached slots for this campaign
+                        await db.AvailableSlots
+                            .Where(s => s.CampaignId == campaign.Id)
+                            .ExecuteDeleteAsync();
 
-                        if (suitableTime is not null)
+                        // Insert new slots
+                        foreach (var slot in slots)
                         {
-                            // suitableTime is already in Moscow time from CheckIfDateIsAvailable
-                            var moscowGameDateTime = suitableTime.Value;
-                            var utcGameDateTime = timeZoneUtilities.ConvertToUtc(moscowGameDateTime);
-
-                            await votingManager.SendVotingMessage(
-                                callbackQuery.Message!.Chat.Id,
-                                callbackQuery.Message.MessageThreadId,
-                                utcGameDateTime,
-                                callbackQuery.From.Username!,
-                                activeMentions,
-                                keyboardGenerator);
+                            await db.AvailableSlots.AddAsync(new AvailableSlot
+                            {
+                                CampaignId = campaign.Id,
+                                DateTime = slot,
+                                ComputedAt = computedAt
+                            });
                         }
+                    }
+
+                    // Also clear cached slots for campaigns that no longer have any available slots
+                    var campaignIdsWithSlots = slotsPerCampaign.Keys.Select(c => c.Id).ToHashSet();
+                    var activeCampaignIds = await db.Campaigns
+                        .Where(c => c.IsActive)
+                        .Select(c => c.Id)
+                        .ToListAsync();
+                    foreach (var cid in activeCampaignIds.Where(id => !campaignIdsWithSlots.Contains(id)))
+                    {
+                        await db.AvailableSlots
+                            .Where(s => s.CampaignId == cid)
+                            .ExecuteDeleteAsync();
+                    }
+
+                    await db.SaveChangesAsync();
+
+                    // Send summary message
+                    if (slotsPerCampaign.Count > 0)
+                    {
+                        var sb = new StringBuilder();
+                        sb.AppendLine("📜 <b>Свободные слоты по кампаниям:</b>");
+                        sb.AppendLine();
+
+                        foreach (var (campaign, slots) in slotsPerCampaign)
+                        {
+                            var slotDescriptions = slots
+                                .Select(s => timeZoneUtilities.ConvertToMoscow(s))
+                                .Select(m => timeZoneUtilities.FormatDateTime(m));
+                            sb.AppendLine(
+                                $"<b>{campaign.ForumThread.Name}:</b> {string.Join(", ", slotDescriptions)}");
+                        }
+
+                        await bot.SendMessage(
+                            callbackQuery.Message!.Chat.Id,
+                            messageThreadId: callbackQuery.Message.MessageThreadId,
+                            text: sb.ToString(),
+                            parseMode: ParseMode.Html);
+                    }
+                    else
+                    {
+                        await bot.SendMessage(
+                            callbackQuery.Message!.Chat.Id,
+                            messageThreadId: callbackQuery.Message.MessageThreadId,
+                            text: "📜 Свободных слотов пока нет — не все герои объявили о своей доступности.",
+                            parseMode: ParseMode.Html);
                     }
 
                     break;

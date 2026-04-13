@@ -14,12 +14,11 @@ Support multiple D&D campaigns within the same Telegram group chat. Each campaig
 |--------|------|-------------|
 | `Id` | int, PK | |
 | `DungeonMasterId` | long, FK → User | The DM who created and runs this campaign |
-| `ChatId` | long | Telegram chat ID |
 | `ForumThreadId` | int, FK → ForumThread | Link to the tracked forum thread (thread name = campaign name) |
 | `IsActive` | bool | Soft-delete flag |
 | `CreatedAt` | DateTime | |
 
-Campaign name is resolved via the linked `ForumThread.Name` — no cached copy needed since thread info is stored locally.
+Campaign name and chat ID are resolved via the linked `ForumThread` — no duplication needed.
 
 #### New Entity: `CampaignMember`
 
@@ -36,7 +35,6 @@ Unique constraint on `(CampaignId, UserId)`. The global `IsActive` flag on `User
 | Column | Type | Description |
 |--------|------|-------------|
 | `Id` | int, PK | |
-| `ChatId` | long | Telegram chat ID |
 | `ForumThreadId` | int, FK → ForumThread | Reference to the tracked forum thread |
 
 #### Modified Entities
@@ -86,7 +84,7 @@ The `UpdateHandler` must route these service messages to a handler that upserts 
 
 - Each campaign is tied to one Telegram thread via `ForumThreadId` FK. Campaign name = `ForumThread.Name`.
 - Use `/service_thread` to mark the current thread as a **service thread** — not related to any campaign. Service threads are used for general coordination (e.g., main chat or an admin thread).
-- Refuse to create a campaign in a service thread.
+- `/campaign_new` automatically unmarks a thread as service if it was previously marked, then creates the campaign.
 
 Thread routing logic:
 
@@ -105,7 +103,7 @@ Thread routing logic:
 
 | Command | Description |
 |---------|-------------|
-| `/campaign_new` | Create campaign bound to current thread (sender = DM). Thread name = campaign name. Refuses to create in service threads. |
+| `/campaign_new` | Create campaign bound to current thread (sender = DM). Thread name = campaign name. If thread is marked as service, unmarks it first and proceeds with campaign creation. |
 | `/campaign_join` | Join the campaign of the current thread, or select from inline keyboard if in service thread |
 | `/campaign_leave` | Leave the campaign of the current thread, or select from inline keyboard if in service thread |
 | `/campaign_delete` | Archive the campaign (DM only). Tied to current thread, or inline keyboard filtered to DM's campaigns if in service thread |

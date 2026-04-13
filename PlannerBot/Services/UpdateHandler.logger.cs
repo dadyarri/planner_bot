@@ -36,4 +36,16 @@ partial class UpdateHandler
 
     [LoggerMessage(LogLevel.Information, "Reminder scheduled to {DateTime:yyyy-MM-dd HH:mm:ss}.")]
     static partial void LogReminderScheduledTo(ILogger<UpdateHandler> logger, DateTime dateTime);
+
+    [LoggerMessage(LogLevel.Information, "Forum topic created: ChatId={ChatId}, ThreadId={ThreadId}")]
+    static partial void LogForumTopicCreated(ILogger<UpdateHandler> logger, long chatId, int threadId);
+
+    [LoggerMessage(LogLevel.Information, "Forum topic edited: ChatId={ChatId}, ThreadId={ThreadId}")]
+    static partial void LogForumTopicEdited(ILogger<UpdateHandler> logger, long chatId, int threadId);
+
+    [LoggerMessage(LogLevel.Information, "Forum topic closed: ChatId={ChatId}, ThreadId={ThreadId}")]
+    static partial void LogForumTopicClosed(ILogger<UpdateHandler> logger, long chatId, int threadId);
+
+    [LoggerMessage(LogLevel.Information, "Forum topic reopened: ChatId={ChatId}, ThreadId={ThreadId}")]
+    static partial void LogForumTopicReopened(ILogger<UpdateHandler> logger, long chatId, int threadId);
 }

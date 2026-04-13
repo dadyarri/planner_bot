@@ -33,6 +33,7 @@ builder.Services.AddScoped<SlotCalculator>();
 builder.Services.AddScoped<VotingManager>();
 builder.Services.AddScoped<GameScheduler>();
 builder.Services.AddScoped<CommandHandler>();
+builder.Services.AddScoped<ForumThreadTracker>();
 builder.Services.AddScoped<Jobs>();
 builder.Services.AddHostedService<PollingService>();
 builder.Services.AddNpgsql<AppDbContext>(databaseUrl);

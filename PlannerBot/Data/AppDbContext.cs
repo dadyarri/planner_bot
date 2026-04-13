@@ -12,6 +12,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<SavedGame> SavedGame { get; set; }
     public DbSet<VoteSession> VoteSessions { get; set; }
     public DbSet<VoteSessionVote> VoteSessionVotes { get; set; }
+    public DbSet<ForumThread> ForumThreads { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -19,6 +20,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         modelBuilder.Entity<VoteSessionVote>()
             .HasIndex(v => new { v.VoteSessionId, v.UserId })
+            .IsUnique();
+
+        modelBuilder.Entity<ForumThread>()
+            .HasIndex(ft => new { ft.ChatId, ft.ThreadId })
             .IsUnique();
 
         modelBuilder.ApplyConfiguration(new TimeTickerConfigurations<TimeTickerEntity>());

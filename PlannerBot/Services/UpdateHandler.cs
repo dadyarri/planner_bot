@@ -24,6 +24,7 @@ public partial class UpdateHandler(
     GameScheduler gameScheduler,
     CommandHandler commandHandler,
     SlotCalculator slotCalculator,
+    ForumThreadTracker forumThreadTracker,
     AppDbContext db) : IUpdateHandler
 {
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
@@ -50,6 +51,37 @@ public partial class UpdateHandler(
 
     private async Task OnMessage(Message msg)
     {
+        // Handle forum topic service messages
+        if (msg.ForumTopicCreated is not null && msg.MessageThreadId is not null)
+        {
+            LogForumTopicCreated(logger, msg.Chat.Id, msg.MessageThreadId.Value);
+            await forumThreadTracker.OnForumTopicCreated(msg.Chat.Id, msg.MessageThreadId.Value,
+                msg.ForumTopicCreated.Name);
+            return;
+        }
+
+        if (msg.ForumTopicEdited is not null && msg.MessageThreadId is not null)
+        {
+            LogForumTopicEdited(logger, msg.Chat.Id, msg.MessageThreadId.Value);
+            await forumThreadTracker.OnForumTopicEdited(msg.Chat.Id, msg.MessageThreadId.Value,
+                msg.ForumTopicEdited.Name);
+            return;
+        }
+
+        if (msg.ForumTopicClosed is not null && msg.MessageThreadId is not null)
+        {
+            LogForumTopicClosed(logger, msg.Chat.Id, msg.MessageThreadId.Value);
+            await forumThreadTracker.OnForumTopicClosed(msg.Chat.Id, msg.MessageThreadId.Value);
+            return;
+        }
+
+        if (msg.ForumTopicReopened is not null && msg.MessageThreadId is not null)
+        {
+            LogForumTopicReopened(logger, msg.Chat.Id, msg.MessageThreadId.Value);
+            await forumThreadTracker.OnForumTopicReopened(msg.Chat.Id, msg.MessageThreadId.Value);
+            return;
+        }
+
         if (msg.Text is not { } text)
         {
             LogReceivedAMessageOfTypeMessagetype(logger, msg.Type);

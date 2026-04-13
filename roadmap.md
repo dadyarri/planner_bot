@@ -59,9 +59,34 @@ Availability responses (yes/no/probably for a date) are **shared** — not per-c
 
 Before creating a voting session, check `SavedGame` for existing games on the same date where any campaign member overlaps. Show a warning if a player already has a game with another campaign at that time.
 
-#### 3. Thread Routing & Service Threads
+#### 3. Thread Tracking via Forum Topic Service Messages
 
-- Each campaign is tied to one Telegram thread. Campaign name = thread name.
+The Telegram Bot API does not provide a direct way to list or query threads in a chat. To work around this, the bot must track threads itself by listening to forum topic service messages on the `Message` update:
+
+- `forum_topic_created` — a new thread was created. Store `ThreadId` and topic name.
+- `forum_topic_edited` — a thread was renamed. Update the cached `Name` on `Campaign` (if linked) and on the `ForumThread` entity.
+- `forum_topic_closed` — a thread was closed. Mark it accordingly.
+- `forum_topic_reopened` — a thread was reopened. Clear the closed flag.
+
+This requires a new entity to store thread metadata separately from campaigns:
+
+**New Entity: `ForumThread`**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `Id` | int, PK | |
+| `ChatId` | long | Telegram chat ID |
+| `ThreadId` | int | Telegram message thread ID |
+| `Name` | string | Thread name (from `forum_topic_created` / `forum_topic_edited`) |
+| `IsClosed` | bool | Whether the thread is currently closed |
+
+The `Campaign.Name` column is populated from `ForumThread.Name` at campaign creation and updated when a `forum_topic_edited` event fires for the linked thread. This avoids any direct Telegram API calls to resolve thread names.
+
+The `UpdateHandler` must route these service messages to a handler that upserts `ForumThread` records and syncs `Campaign.Name` when applicable.
+
+#### 4. Thread Routing & Service Threads
+
+- Each campaign is tied to one Telegram thread. Campaign name = thread name (cached via `ForumThread`).
 - Use `/service_thread` to mark the current thread as a **service thread** — not related to any campaign. Service threads are used for general coordination (e.g., main chat or an admin thread).
 - Refuse to create a campaign in a service thread.
 
@@ -70,7 +95,7 @@ Thread routing logic:
 - Commands in a campaign's thread auto-scope to that campaign
 - Commands in a service thread: show campaign selector inline keyboard (if applicable)
 
-#### 4. Reminders
+#### 5. Reminders
 
 - Game reminders go to the campaign's specific thread via `messageThreadId`
 - Reminder format: "The game is in <thread link> at <time>. Players: <player mentions>"

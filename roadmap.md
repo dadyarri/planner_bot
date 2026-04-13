@@ -83,8 +83,8 @@ The `UpdateHandler` must route these service messages to a handler that upserts 
 #### 4. Thread Routing & Service Threads
 
 - Each campaign is tied to one Telegram thread via `ForumThreadId` FK. Campaign name = `ForumThread.Name`.
-- Use `/service_thread` to mark the current thread as a **service thread** — not related to any campaign. Service threads are used for general coordination (e.g., main chat or an admin thread).
-- `/campaign_new` automatically unmarks a thread as service if it was previously marked, then creates the campaign.
+- Use `/service_thread` to **toggle** the service thread status of the current thread. If the thread is not a service thread, it marks it as one; if it already is a service thread, it unmarks it. Service threads are used for general coordination (e.g., main chat or an admin thread).
+- `/campaign_new` **refuses** to create a campaign in a service thread — the user must first unmark the thread via `/service_thread`.
 
 Thread routing logic:
 
@@ -103,11 +103,11 @@ Thread routing logic:
 
 | Command | Description |
 |---------|-------------|
-| `/campaign_new` | Create campaign bound to current thread (sender = DM). Thread name = campaign name. If thread is marked as service, unmarks it first and proceeds with campaign creation. |
+| `/campaign_new` | Create campaign bound to current thread (sender = DM). Thread name = campaign name. **Refuses** if thread is marked as service — user must unmark it first via `/service_thread`. |
 | `/campaign_join` | Join the campaign of the current thread, or select from inline keyboard if in service thread |
 | `/campaign_leave` | Leave the campaign of the current thread, or select from inline keyboard if in service thread |
 | `/campaign_delete` | Archive the campaign (DM only). Tied to current thread, or inline keyboard filtered to DM's campaigns if in service thread |
-| `/service_thread` | Mark the current thread as a service thread (not tied to any campaign) |
+| `/service_thread` | **Toggle** service thread status for the current thread. If not service — marks it; if already service — unmarks it. |
 
 #### Modified Commands — Global (not campaign-scoped)
 

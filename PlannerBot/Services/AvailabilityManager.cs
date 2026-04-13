@@ -355,23 +355,24 @@ public class AvailabilityManager
         if (existingVote)
             return false;
 
-        // Record the vote
+        // Record the vote and persist it
         await _db.VoteSessionVotes.AddAsync(new VoteSessionVote
         {
             VoteSessionId = votingSessionId,
             UserId = userId,
             VotedAt = DateTime.UtcNow
         });
+        await _db.SaveChangesAsync();
 
-        // Atomically increment vote count
+        // Atomically increment vote count (commits immediately)
         await _db.VoteSessions
             .Where(vs => vs.Id == votingSessionId)
             .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount + 1));
 
-        await _db.SaveChangesAsync();
-
         // Re-read the updated count
-        var updatedSession = await _db.VoteSessions.FirstOrDefaultAsync(vs => vs.Id == votingSessionId);
+        var updatedSession = await _db.VoteSessions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(vs => vs.Id == votingSessionId);
         if (updatedSession is null)
             return false;
 
@@ -394,13 +395,12 @@ public class AvailabilityManager
             return;
 
         _db.VoteSessionVotes.Remove(vote);
+        await _db.SaveChangesAsync();
 
-        // Atomically decrement vote count (ensure non-negative)
+        // Atomically decrement vote count (commits immediately)
         await _db.VoteSessions
             .Where(vs => vs.Id == votingSessionId && vs.VoteCount > 0)
             .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount - 1));
-
-        await _db.SaveChangesAsync();
     }
 
     /// <summary>

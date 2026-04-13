@@ -292,7 +292,8 @@ public class CommandHandler(
 
     private async Task HandlePlanCommand(Message msg)
     {
-        var calendar = await keyboardGenerator.GeneratePlanKeyboard(msg.From!.Username);
+        var user = await EnsureUser(msg);
+        var calendar = await keyboardGenerator.GeneratePlanKeyboard(user.Id);
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: "🗓️ Начертай свой путь на грядущие луны:", parseMode: ParseMode.Html,
@@ -350,19 +351,20 @@ public class CommandHandler(
             return;
         }
 
-        // Build mentions from campaign members
+        // Build mentions from active campaign members
         var memberUserIds = await db.CampaignMembers
             .Where(cm => cm.CampaignId == campaign.Id)
             .Select(cm => cm.UserId)
             .ToListAsync();
         var memberUsers = await db.Users
-            .Where(u => memberUserIds.Contains(u.Id))
+            .Where(u => memberUserIds.Contains(u.Id) && u.IsActive)
             .ToListAsync();
         var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
 
+        var user = await EnsureUser(msg);
         await votingManager.SendVotingMessage(
             msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
-            msg.From!.Username!, activeMentions, keyboardGenerator, campaign.Id);
+            user.Id, activeMentions, keyboardGenerator, campaign.Id);
 
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
     }
@@ -534,7 +536,7 @@ public class CommandHandler(
         }
 
         var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
-            CallbackActions.CampaignJoin, campaigns, msg.From!.Username!);
+            CallbackActions.CampaignJoin, campaigns, user.Id);
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: "⚔️ Выбери кампанию, в которую хочешь вступить:",
@@ -580,7 +582,7 @@ public class CommandHandler(
         }
 
         var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
-            CallbackActions.CampaignLeave, campaigns, msg.From!.Username!);
+            CallbackActions.CampaignLeave, campaigns, user.Id);
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: "👋 Выбери кампанию, которую хочешь покинуть:",
@@ -626,7 +628,7 @@ public class CommandHandler(
         }
 
         var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
-            CallbackActions.CampaignDelete, campaigns, msg.From!.Username!);
+            CallbackActions.CampaignDelete, campaigns, user.Id);
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: "📕 Выбери кампанию для завершения:",
@@ -682,7 +684,7 @@ public class CommandHandler(
                     return;
                 }
 
-                await ShowSlotPickerForCampaign(msg.Chat.Id, msg.MessageThreadId, campaign.Id, user.Username);
+                await ShowSlotPickerForCampaign(msg.Chat.Id, msg.MessageThreadId, campaign.Id, user.Id);
                 return;
             }
         }
@@ -698,7 +700,7 @@ public class CommandHandler(
         }
 
         var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
-            CallbackActions.StealCampaign, dmCampaigns, msg.From!.Username!);
+            CallbackActions.StealCampaign, dmCampaigns, user.Id);
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: "🎯 Выбери кампанию, для которой хочешь захватить слот:",
@@ -710,7 +712,7 @@ public class CommandHandler(
     /// Shows the slot picker for a campaign, filtering out past slots.
     /// Shared between the campaign thread flow and the service thread callback.
     /// </summary>
-    internal async Task ShowSlotPickerForCampaign(long chatId, int? threadId, int campaignId, string username)
+    internal async Task ShowSlotPickerForCampaign(long chatId, int? threadId, int campaignId, long userId)
     {
         var now = DateTime.UtcNow;
         var slots = await db.AvailableSlots
@@ -726,7 +728,7 @@ public class CommandHandler(
             return;
         }
 
-        var keyboard = keyboardGenerator.GenerateSlotPickerKeyboard(campaignId, slots, username);
+        var keyboard = keyboardGenerator.GenerateSlotPickerKeyboard(campaignId, slots, userId);
 
         await bot.SendMessage(chatId, messageThreadId: threadId,
             text: "🎲 Выбери свободный слот для битвы:",

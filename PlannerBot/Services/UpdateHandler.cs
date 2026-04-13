@@ -116,17 +116,12 @@ public partial class UpdateHandler(
                 {
                     LogReceivedPlanCommand(logger);
                     var date = DateTime.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
-                    var username = split[2];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
-                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
+                    var userId = long.Parse(split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
 
                     await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                        new InlineKeyboardMarkup(keyboardGenerator.GenerateStatusKeyboard(date, username)));
+                        new InlineKeyboardMarkup(keyboardGenerator.GenerateStatusKeyboard(date, userId)));
 
                     break;
                 }
@@ -135,14 +130,9 @@ public partial class UpdateHandler(
                     LogReceivedPlanCommand(logger);
                     var availability = int.Parse(split[1]);
                     var date = DateTime.ParseExact(split[2], "dd/MM/yyyy", CultureInfo.InvariantCulture);
-                    var username = split[3];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
-                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
+                    var userId = long.Parse(split[3]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
 
                     var utcDate = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
                     var selectedAvailability = (Availability)availability;
@@ -151,13 +141,13 @@ public partial class UpdateHandler(
                     {
                         await bot.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                             text: "🕐 Назови час присоединения к грядущей битве",
-                            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, username)));
+                            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, userId)));
                     }
                     else
                     {
                         await availabilityManager.UpdateResponseForDate(callbackQuery.From, selectedAvailability, utcDate);
                         await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                            new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
+                            new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId)));
                     }
 
                     break;
@@ -170,14 +160,9 @@ public partial class UpdateHandler(
                         DateTime.ParseExact(split[1], "dd/MM/yyyyTHH:mm", CultureInfo.InvariantCulture),
                         DateTimeKind.Utc
                     );
-                    var username = split[2];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        LogWrongUserUsedPtimeButtonDataCq(logger, username, callbackQuery.From.Username!);
-                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
+                    var userId = long.Parse(split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
 
                     var utcDateTime = timeZoneUtilities.ConvertToUtc(dateTime);
 
@@ -185,23 +170,19 @@ public partial class UpdateHandler(
 
                     await bot.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                         text: "🗓️ Примени заклинание предсказания - объяви о свободных днях:",
-                        replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
+                        replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId)));
 
                     break;
                 }
             case CallbackActions.PlanBack:
                 {
                     LogReceivedPbackCommand(logger);
-                    var username = split[1];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
+                    var userId = long.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
 
                     await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                        new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
+                        new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId)));
                     break;
                 }
             case CallbackActions.PlanDone:
@@ -283,14 +264,9 @@ public partial class UpdateHandler(
                 }
             case CallbackActions.VoteCancel:
                 {
-                    var creatorUsername = split[1];
-
-                    if (creatorUsername != callbackQuery.From.Username)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id,
-                            "🚨 Только создатель голосования может его отменить!");
-                        return;
-                    }
+                    var creatorUserId = long.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, creatorUserId);
+                    if (user is null) return;
 
                     var voteSession = await db.VoteSessions
                         .FirstOrDefaultAsync(vs =>
@@ -314,7 +290,7 @@ public partial class UpdateHandler(
             case CallbackActions.CampaignJoin:
                 {
                     var campaignId = int.Parse(split[1]);
-                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
                     if (user is null) return;
 
                     var joinError = await campaignManager.JoinCampaign(campaignId, user.Id);
@@ -331,7 +307,7 @@ public partial class UpdateHandler(
             case CallbackActions.CampaignLeave:
                 {
                     var campaignId = int.Parse(split[1]);
-                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
                     if (user is null) return;
 
                     var leaveError = await campaignManager.LeaveCampaign(campaignId, user.Id);
@@ -348,7 +324,7 @@ public partial class UpdateHandler(
             case CallbackActions.CampaignDelete:
                 {
                     var campaignId = int.Parse(split[1]);
-                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
                     if (user is null) return;
 
                     var deleteError = await campaignManager.DeleteCampaign(campaignId, user.Id);
@@ -365,7 +341,7 @@ public partial class UpdateHandler(
             case CallbackActions.StealCampaign:
                 {
                     var campaignId = int.Parse(split[1]);
-                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
                     if (user is null) return;
 
                     // Verify DM ownership
@@ -399,15 +375,17 @@ public partial class UpdateHandler(
                         callbackQuery.Message.Chat.Id,
                         callbackQuery.Message.MessageThreadId,
                         campaignId,
-                        user.Username);
+                        user.Id);
 
                     break;
                 }
             case CallbackActions.StealSlot:
                 {
                     var campaignId = int.Parse(split[1]);
-                    var slotUtc = DateTime.Parse(split[2], null, System.Globalization.DateTimeStyles.RoundtripKind);
-                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, split[3]);
+                    var slotUtc = DateTime.SpecifyKind(
+                        DateTime.ParseExact(split[2], "yyMMddHHmm", CultureInfo.InvariantCulture),
+                        DateTimeKind.Utc);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[3]));
                     if (user is null) return;
 
                     // Load campaign with thread and members
@@ -436,10 +414,10 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    // Build mentions from campaign members
+                    // Build mentions from active campaign members
                     var memberUserIds = campaign.Members.Select(m => m.UserId).ToHashSet();
                     var memberUsers = await db.Users
-                        .Where(u => memberUserIds.Contains(u.Id))
+                        .Where(u => memberUserIds.Contains(u.Id) && u.IsActive)
                         .ToListAsync();
                     var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
 
@@ -451,11 +429,20 @@ public partial class UpdateHandler(
                         campaign.ForumThread.ChatId,
                         campaign.ForumThread.ThreadId,
                         slotUtc,
-                        user.Username,
+                        user.Id,
                         activeMentions,
                         keyboardGenerator,
                         campaignId);
 
+                    break;
+                }
+            case CallbackActions.Dismiss:
+                {
+                    var userId = long.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
+
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                     break;
                 }
         }
@@ -620,26 +607,26 @@ public partial class UpdateHandler(
     }
 
     /// <summary>
-    /// Validates callback ownership and resolves the user from the database.
-    /// Returns null and sends an appropriate callback answer if validation fails.
+    /// Validates callback ownership by looking up the user by DB ID and comparing
+    /// their username to the callback sender. Returns null if validation fails.
     /// </summary>
     private async Task<Data.User?> ValidateCallbackOwnerAndResolveUser(
-        CallbackQuery callbackQuery, string expectedUsername)
+        CallbackQuery callbackQuery, long userId)
     {
-        if (expectedUsername != callbackQuery.From.Username)
-        {
-            await bot.AnswerCallbackQuery(callbackQuery.Id,
-                "🚨 Эта кнопка защищена древним проклятием!");
-            return null;
-        }
-
-        var user = await db.Users.FirstOrDefaultAsync(
-            u => u.Username == callbackQuery.From.Username);
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId);
 
         if (user is null)
         {
             await bot.AnswerCallbackQuery(callbackQuery.Id,
                 "⚠️ Сначала зарегистрируйся командой /unpause");
+            return null;
+        }
+
+        if (user.Username != callbackQuery.From.Username)
+        {
+            await bot.AnswerCallbackQuery(callbackQuery.Id,
+                "🚨 Эта кнопка защищена древним проклятием!");
+            return null;
         }
 
         return user;

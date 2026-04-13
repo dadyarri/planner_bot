@@ -8,6 +8,8 @@ namespace PlannerBot.Services;
 /// <summary>
 /// Generates inline keyboards for Telegram bot interactions.
 /// Responsible for creating calendars and time selection menus.
+/// All callback payloads use DB user IDs (not usernames) and short action prefixes
+/// to stay within Telegram's 64-byte callback data limit.
 /// </summary>
 public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilities)
 {
@@ -15,8 +17,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     /// Generates a keyboard for planning availability over 12 days.
     /// Displays current availability status for each day.
     /// </summary>
-    public async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(
-        string? username = null)
+    public async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(long userId)
     {
         var now = DateTime.UtcNow;
         var today = now.Date;
@@ -29,7 +30,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
         // Fetch all availability data for the date range in a single query
         var availabilityByDate = await db.Responses
-            .Where(r => r.User.Username == username &&
+            .Where(r => r.User.Id == userId &&
                         r.DateTime.HasValue &&
                         r.DateTime.Value.Date >= today &&
                         r.DateTime.Value.Date < endDate)
@@ -60,7 +61,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
                 var format = date.ToString("dd.MM (ddd)", culture);
                 inlineKeyboardButtons[w][d] = InlineKeyboardButton.WithCallbackData(
                     $"{emoji}{format}",
-                    $"{CallbackActions.Plan};{date:dd/MM/yyyy};{username}"
+                    $"{CallbackActions.Plan};{date:dd/MM/yyyy};{userId}"
                 );
             }
         }
@@ -81,17 +82,17 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     /// </summary>
     public InlineKeyboardButton[][] GenerateStatusKeyboard(
         DateTime date,
-        string? username = null)
+        long userId)
     {
         return
         [
             [
-                InlineKeyboardButton.WithCallbackData("🟢", $"{CallbackActions.PlanStatus};{(int)Availability.Yes};{date:dd/MM/yyyy};{username}"),
-                InlineKeyboardButton.WithCallbackData("🔴", $"{CallbackActions.PlanStatus};{(int)Availability.No};{date:dd/MM/yyyy};{username}"),
-                InlineKeyboardButton.WithCallbackData("🤷", $"{CallbackActions.PlanStatus};{(int)Availability.Probably};{date:dd/MM/yyyy};{username}"),
+                InlineKeyboardButton.WithCallbackData("🟢", $"{CallbackActions.PlanStatus};{(int)Availability.Yes};{date:dd/MM/yyyy};{userId}"),
+                InlineKeyboardButton.WithCallbackData("🔴", $"{CallbackActions.PlanStatus};{(int)Availability.No};{date:dd/MM/yyyy};{userId}"),
+                InlineKeyboardButton.WithCallbackData("🤷", $"{CallbackActions.PlanStatus};{(int)Availability.Probably};{date:dd/MM/yyyy};{userId}"),
             ],
             [
-                InlineKeyboardButton.WithCallbackData("Назад", $"{CallbackActions.PlanBack};{username}")
+                InlineKeyboardButton.WithCallbackData("Назад", $"{CallbackActions.PlanBack};{userId}")
             ]
         ];
     }
@@ -101,7 +102,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     /// </summary>
     public InlineKeyboardButton[][] GenerateTimeKeyboard(
         DateTime date,
-        string? username = null)
+        long userId)
     {
         var start = new TimeSpan(6, 0, 0);
         var end = new TimeSpan(17, 30, 0);
@@ -120,7 +121,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
             currentRow.Add(
                 InlineKeyboardButton.WithCallbackData(
                     localDt.ToString("HH:mm"),
-                    $"{CallbackActions.PlanTime};{dt:dd/MM/yyyyTHH:mm};{username}"
+                    $"{CallbackActions.PlanTime};{dt:dd/MM/yyyyTHH:mm};{userId}"
                 )
             );
 
@@ -136,7 +137,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         [
             InlineKeyboardButton.WithCallbackData(
                 "Назад",
-                $"{CallbackActions.PlanBack};{username}"
+                $"{CallbackActions.PlanBack};{userId}"
             )
         ]);
 
@@ -145,45 +146,55 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
     /// <summary>
     /// Generates a keyboard with a cancel button for voting sessions.
-    /// The cancel button embeds the creator's username for ownership verification.
+    /// The cancel button embeds the creator's DB user ID for ownership verification.
     /// </summary>
-    public InlineKeyboardButton[][] GenerateVoteCancelKeyboard(string creatorUsername)
+    public InlineKeyboardButton[][] GenerateVoteCancelKeyboard(long creatorUserId)
     {
         return
         [
             [
                 InlineKeyboardButton.WithCallbackData(
                     "❌ Отменить голосование",
-                    $"{CallbackActions.VoteCancel};{creatorUsername}")
+                    $"{CallbackActions.VoteCancel};{creatorUserId}")
             ]
         ];
     }
 
     /// <summary>
     /// Generates a campaign picker keyboard for the given action and campaigns.
-    /// Each button shows the campaign name (from linked ForumThread) and embeds campaign ID + username.
+    /// Each button shows the campaign name (from linked ForumThread) and embeds campaign ID + user ID.
+    /// Includes a cancel button at the bottom.
     /// </summary>
     public InlineKeyboardButton[][] GenerateCampaignPickerKeyboard(
-        string action, IReadOnlyList<Campaign> campaigns, string username)
+        string action, IReadOnlyList<Campaign> campaigns, long userId)
     {
         var buttons = campaigns
             .Select(c => new[]
             {
                 InlineKeyboardButton.WithCallbackData(
                     $"⚔️ {c.ForumThread.Name}",
-                    $"{action};{c.Id};{username}")
+                    $"{action};{c.Id};{userId}")
             })
-            .ToArray();
+            .ToList();
 
-        return buttons;
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Отмена",
+                $"{CallbackActions.Dismiss};{userId}")
+        ]);
+
+        return buttons.ToArray();
     }
 
     /// <summary>
     /// Generates a slot picker keyboard for /steal.
-    /// Each button shows the slot date/time in Moscow time and embeds campaign ID, slot UTC, and username.
+    /// Each button shows the slot date/time in Moscow time and embeds campaign ID, slot datetime, and user ID.
+    /// Uses compact datetime format (yyMMddHHmm) to stay within 64-byte callback data limit.
+    /// Includes a cancel button at the bottom.
     /// </summary>
     public InlineKeyboardButton[][] GenerateSlotPickerKeyboard(
-        int campaignId, IReadOnlyList<AvailableSlot> slots, string username)
+        int campaignId, IReadOnlyList<AvailableSlot> slots, long userId)
     {
         var buttons = slots
             .Select(s =>
@@ -193,11 +204,18 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
                 {
                     InlineKeyboardButton.WithCallbackData(
                         $"🗓️ {timeZoneUtilities.FormatDateTime(moscow)}",
-                        $"{CallbackActions.StealSlot};{campaignId};{s.DateTime:O};{username}")
+                        $"{CallbackActions.StealSlot};{campaignId};{s.DateTime:yyMMddHHmm};{userId}")
                 };
             })
-            .ToArray();
+            .ToList();
 
-        return buttons;
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Отмена",
+                $"{CallbackActions.Dismiss};{userId}")
+        ]);
+
+        return buttons.ToArray();
     }
 }

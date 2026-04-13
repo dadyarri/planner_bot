@@ -282,20 +282,21 @@ public class VotingManager
         long chatId,
         int? threadId,
         DateTime utcGameDateTime,
-        string creatorUsername,
+        long creatorUserId,
         string activeMentions,
         KeyboardGenerator keyboard,
         int campaignId)
     {
+        var creator = await _db.Users.FirstAsync(u => u.Id == creatorUserId);
         var moscowGameDateTime = _timeZoneUtilities.ConvertToMoscow(utcGameDateTime);
         var sentMessage = await _bot.SendMessage(chatId,
             messageThreadId: threadId,
             text:
             $"⚔️ Совет братства решает! {_timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{_timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 — Поддержать запись битвы в летописи\n👎 — Отклонить этот час\n\n{activeMentions}",
             parseMode: ParseMode.Html, linkPreviewOptions: true,
-            replyMarkup: new InlineKeyboardMarkup(keyboard.GenerateVoteCancelKeyboard(creatorUsername)));
+            replyMarkup: new InlineKeyboardMarkup(keyboard.GenerateVoteCancelKeyboard(creatorUserId)));
 
-        var votingSession = await CreateVotingSession(utcGameDateTime, sentMessage, creatorUsername, campaignId);
+        var votingSession = await CreateVotingSession(utcGameDateTime, sentMessage, creator.Username, campaignId);
         if (votingSession is not null)
         {
             votingSession.MessageId = sentMessage.MessageId;

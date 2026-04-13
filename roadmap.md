@@ -1,168 +1,199 @@
-# Roadmap
+# Roadmap: Multi-DM & Multi-Campaign Support
 
-## Multi-DM & Multi-Campaign Support
+## Концепция
 
-### Concept
+Поддержка нескольких D&D-кампаний в одном Telegram-чате с форумными тредами. У каждой кампании свой мастер подземелий (DM), свой тред и своё расписание игр. Доступность игроков — общая для всех кампаний, чтобы не заполнять календарь повторно.
 
-Support multiple D&D campaigns within the same Telegram group chat. Each campaign has its own dungeon master (DM), dedicated thread, and independent scheduling — but shares a common availability pool so campaigns don't collide.
+---
 
-### Data Model Changes
+## Этап 1: Отслеживание тредов (ForumThread)
 
-#### New Entity: `Campaign`
+Telegram Bot API не предоставляет прямого доступа к списку тредов. Бот должен сам отслеживать треды, слушая служебные сообщения:
 
-| Column | Type | Description |
-|--------|------|-------------|
+- `forum_topic_created` — создан новый тред. Сохранить `ThreadId` и название.
+- `forum_topic_edited` — тред переименован. Обновить `ForumThread.Name`.
+- `forum_topic_closed` — тред закрыт. Установить `IsClosed = true`.
+- `forum_topic_reopened` — тред открыт заново. Установить `IsClosed = false`.
+
+### Сущность: `ForumThread`
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
 | `Id` | int, PK | |
-| `DungeonMasterId` | long, FK → User | The DM who created and runs this campaign |
-| `ForumThreadId` | int, FK → ForumThread | Link to the tracked forum thread (thread name = campaign name) |
-| `IsActive` | bool | Soft-delete flag |
+| `ChatId` | long | Telegram chat ID |
+| `ThreadId` | int | Telegram message thread ID |
+| `Name` | string | Название треда |
+| `IsClosed` | bool | Закрыт ли тред |
+
+`UpdateHandler` направляет эти служебные сообщения в обработчик, который выполняет upsert записей `ForumThread`.
+
+---
+
+## Этап 2: Кампании и участники
+
+### Сущность: `Campaign`
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
+| `Id` | int, PK | |
+| `DungeonMasterId` | long, FK → User | DM, создавший кампанию |
+| `ForumThreadId` | int, FK → ForumThread | Ссылка на тред (название кампании = `ForumThread.Name`) |
+| `IsActive` | bool | Флаг мягкого удаления |
 | `CreatedAt` | DateTime | |
 
-Campaign name and chat ID are resolved via the linked `ForumThread` — no duplication needed.
+Название кампании и chat ID всегда берутся из связанного `ForumThread` — никакого дублирования.
 
-#### New Entity: `CampaignMember`
+### Сущность: `CampaignMember`
 
-| Column | Type | Description |
-|--------|------|-------------|
+| Колонка | Тип | Описание |
+|---------|-----|----------|
 | `CampaignId` | int, FK → Campaign | |
 | `UserId` | long, FK → User | |
 | `JoinedAt` | DateTime | |
 
-Unique constraint on `(CampaignId, UserId)`. The global `IsActive` flag on `User` is preserved — it allows a user to temporarily pause participation across all campaigns (via `/pause` and `/unpause`). `CampaignMember` tracks which campaigns a user belongs to, while `IsActive` controls whether they are currently participating.
+Уникальное ограничение на `(CampaignId, UserId)`.
 
-#### New Entity: `ServiceThread`
+Глобальный флаг `IsActive` на `User` сохраняется — он позволяет временно приостановить участие во всех кампаниях через `/pause` и `/unpause`. `CampaignMember` отслеживает, в каких кампаниях состоит пользователь.
 
-| Column | Type | Description |
-|--------|------|-------------|
+### Сущность: `ServiceThread`
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
 | `Id` | int, PK | |
-| `ForumThreadId` | int, FK → ForumThread | Reference to the tracked forum thread |
+| `ForumThreadId` | int, FK → ForumThread | Ссылка на тред |
 
-#### Modified Entities
+Служебные треды — это треды, не привязанные к кампаниям (например, основной чат или админ-тред).
 
-- **SavedGame** — add `CampaignId` (FK → Campaign, **not null**) for per-campaign scoping.
-- **VoteSession** — add `CampaignId` (FK → Campaign, **not null**) for per-campaign scoping.
+---
 
-### Pre-Implementation Refactoring
+## Этап 3: Изменение поведения `/plan`
 
-Before implementing multi-campaign support, a refactoring pass is needed to make the codebase more maintainable:
+### Что остаётся без изменений
 
-- **Extract `SlotCalculator` service** — a dedicated service that computes per-campaign availability from the shared `Response` table, scoped to each campaign's member list.
-- **Clean up callback handler routing** in `UpdateHandler` — standardize how callback data is parsed and dispatched.
-- **Standardize campaign-scoping pattern** across commands — a reusable helper that resolves the current campaign from thread context or shows an inline keyboard selector in service threads.
+Взаимодействие игрока с командой `/plan` **не меняется**: игрок выбирает дни через инлайн-клавиатуру, для каждого дня указывает доступность (да/нет/возможно), при ответе «да» выбирает время, с которого свободен. Это глобальная операция, не привязанная к конкретной кампании.
 
-### Key Design Decisions
+### Что меняется
 
-#### 1. Shared Availability Across Campaigns
+После завершения заполнения (нажатие кнопки «Готово»/удаление клавиатуры) — поведение меняется:
 
-Availability responses (yes/no/probably for a date) are **shared** — not per-campaign. When a player says "I'm available Tuesday", that applies across all campaigns they belong to. This avoids asking them to fill the same calendar multiple times.
+1. **Автоматическое создание голосования убирается.** Бот больше не создаёт голосование автоматически.
+2. **Расчёт свободных слотов по кампаниям.** Бот берёт общую доступность из таблицы `Response` и для каждой кампании проверяет, в какие даты и время **все участники этой кампании** свободны. У разных кампаний разные участники, поэтому свободные слоты могут отличаться.
+3. **Вывод результатов.** Бот отправляет сообщение с группировкой по кампаниям, например:
+   - «Кампания "Throne of Darkness": все игроки свободны в субботу 18:00, воскресенье 15:00»
+   - «Кампания "Lost Mines": все игроки свободны в субботу 18:00»
+4. **Кэширование результатов.** Рассчитанные слоты сохраняются в таблицу `AvailableSlot`, чтобы DM мог быстро создать голосование через `/steal`.
 
-- `Response` keeps its current structure (user + date + availability) with no campaign reference
-- `CheckIfDateIsAvailable` is scoped to campaign members (not all active users), but reads from the shared `Response` table
+### Сущность: `AvailableSlot`
 
-#### 2. Per-Campaign `/plan` Output
-
-`/plan` no longer auto-creates voting sessions. Instead, after all active users fill in availability:
-
-1. `/plan` computes available time slots **per campaign** (each campaign may have different member sets)
-2. Output groups results by campaign, e.g.:
-   - "Кампания «Throne of Darkness»: все игроки свободны в субботу 18:00, воскресенье 15:00"
-   - "Кампания «Lost Mines»: все игроки свободны в субботу 18:00"
-3. The computed slots are cached in the `AvailableSlot` table for quick access by DMs
-
-#### New Entity: `AvailableSlot`
-
-| Column | Type | Description |
-|--------|------|-------------|
+| Колонка | Тип | Описание |
+|---------|-----|----------|
 | `Id` | int, PK | |
-| `CampaignId` | int, FK → Campaign | Which campaign this slot is for |
-| `DateTime` | DateTime | Available time slot (UTC) |
-| `ComputedAt` | DateTime | When this cache entry was computed |
+| `CampaignId` | int, FK → Campaign | Для какой кампании слот |
+| `DateTime` | DateTime | Доступный слот (UTC) |
+| `ComputedAt` | DateTime | Когда вычислен |
 
-The cache is refreshed whenever `/plan` runs or any player updates their availability.
+Кэш обновляется при каждом завершении `/plan` любым игроком.
 
-#### 3. `/steal` Command — Quick Voting from Cached Slots
+---
 
-DMs use `/steal` to quickly start a voting session from cached available slots:
+## Этап 4: Команда `/steal` — быстрое создание голосования
 
-1. In a campaign thread: shows inline keyboard with cached available slots for that campaign
-2. In a service thread: first shows campaign selector, then available slots for the selected campaign
-3. DM picks a slot → bot immediately starts a voting session for that slot (no manual date/time entry)
+DM вызывает `/steal` для быстрого выбора из кэшированных свободных слотов:
 
-This replaces the old auto-vote behavior of `/plan` with an explicit, campaign-scoped flow.
+1. **В треде кампании:** бот показывает инлайн-клавиатуру с доступными слотами для этой кампании.
+2. **В служебном треде:** сначала выбор кампании (из тех, где пользователь — DM), затем слоты для выбранной кампании.
+3. DM выбирает слот → бот сразу создаёт голосование (без ручного ввода даты и времени).
 
-#### 4. Collision Checks Between Campaigns
+---
 
-Before creating a voting session, check `SavedGame` for existing games on the same date where any campaign member overlaps. Show a warning if a player already has a game with another campaign at that time.
+## Этап 5: Проверки коллизий
 
-#### 5. Thread Tracking via Forum Topic Service Messages
+Перед созданием голосования (через `/vote` или `/steal`) бот проверяет таблицу `SavedGame` на наличие пересечений: если кто-то из участников кампании уже имеет сохранённую игру в другой кампании на эту же дату — показать предупреждение.
 
-The Telegram Bot API does not provide a direct way to list or query threads in a chat. To work around this, the bot must track threads itself by listening to forum topic service messages on the `Message` update:
+---
 
-- `forum_topic_created` — a new thread was created. Store `ThreadId` and topic name.
-- `forum_topic_edited` — a thread was renamed. Update `ForumThread.Name` (campaigns linked via FK see the change automatically).
-- `forum_topic_closed` — a thread was closed. Mark it accordingly.
-- `forum_topic_reopened` — a thread was reopened. Clear the closed flag.
+## Этап 6: Маршрутизация тредов и служебные треды
 
-This requires a new entity to store thread metadata separately from campaigns:
+- Каждая кампания привязана к одному треду через `ForumThreadId` FK.
+- `/service_thread` **переключает** статус служебного треда: если тред не служебный — помечает его как служебный; если уже служебный — снимает пометку.
+- `/campaign_new` **отказывается** создавать кампанию в служебном треде. Сначала нужно снять пометку через `/service_thread`.
 
-**New Entity: `ForumThread`**
+Логика маршрутизации команд:
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `Id` | int, PK | |
-| `ChatId` | long | Telegram chat ID |
-| `ThreadId` | int | Telegram message thread ID |
-| `Name` | string | Thread name (from `forum_topic_created` / `forum_topic_edited`) |
-| `IsClosed` | bool | Whether the thread is currently closed |
+- В треде кампании: команды автоматически привязываются к этой кампании.
+- В служебном треде: показывается инлайн-клавиатура для выбора кампании (если применимо).
 
-The `Campaign` table links to `ForumThread` via `ForumThreadId` FK — campaign name is always resolved from `ForumThread.Name`, no duplication needed. When a `forum_topic_edited` event fires, only the `ForumThread` record is updated, and all linked campaigns automatically see the new name.
+---
 
-The `UpdateHandler` must route these service messages to a handler that upserts `ForumThread` records.
+## Этап 7: Напоминания
 
-#### 6. Thread Routing & Service Threads
+- Напоминания об играх отправляются в тред кампании через `messageThreadId`.
+- Формат: «Игра через <время> в <ссылка на тред>. Мастер: <упоминание DM>. Игроки: <упоминания игроков>».
+- Еженедельные напоминания о планировании (`/weekly`) — **глобальные**, не привязаны к кампании.
 
-- Each campaign is tied to one Telegram thread via `ForumThreadId` FK. Campaign name = `ForumThread.Name`.
-- Use `/service_thread` to **toggle** the service thread status of the current thread. If the thread is not a service thread, it marks it as one; if it already is a service thread, it unmarks it. Service threads are used for general coordination (e.g., main chat or an admin thread).
-- `/campaign_new` **refuses** to create a campaign in a service thread — the user must first unmark the thread via `/service_thread`.
+---
 
-Thread routing logic:
+## Команды
 
-- Commands in a campaign's thread auto-scope to that campaign
-- Commands in a service thread: show campaign selector inline keyboard (if applicable)
+### Новые команды
 
-#### 7. Reminders
+| Команда | Описание |
+|---------|----------|
+| `/campaign_new` | Создать кампанию в текущем треде (отправитель = DM). Название = название треда. **Отказывает** в служебных тредах. |
+| `/campaign_join` | Вступить в кампанию текущего треда. В служебном треде — выбор через инлайн-клавиатуру. |
+| `/campaign_leave` | Покинуть кампанию текущего треда. В служебном треде — выбор через инлайн-клавиатуру. |
+| `/campaign_delete` | Архивировать кампанию (только DM). В служебном треде — клавиатура с кампаниями, где пользователь DM. |
+| `/service_thread` | Переключить статус служебного треда (пометить/снять пометку). |
+| `/steal` | Только DM. Показать кэшированные свободные слоты (инлайн-клавиатура). Выбор слота → создание голосования. В служебном треде — сначала выбор кампании. |
 
-- Game reminders go to the campaign's specific thread via `messageThreadId`
-- Reminder format: "The game is in <thread link> at <time>. Players: <player mentions>"
-- Weekly planning reminders (`/weekly`) are **global** — not tied to a specific campaign
+### Глобальные команды (без привязки к кампании)
 
-### Command Changes
+- `/plan`, `/yes`, `/no`, `/prob`, `/get` — глобальные. `/plan` после завершения заполнения показывает свободные слоты по кампаниям и кэширует результат.
+- `/weekly` — глобальные еженедельные напоминания о планировании.
 
-#### New Commands
+### Команды, привязанные к кампании
 
-| Command | Description |
-|---------|-------------|
-| `/campaign_new` | Create campaign bound to current thread (sender = DM). Thread name = campaign name. **Refuses** if thread is marked as service — user must unmark it first via `/service_thread`. |
-| `/campaign_join` | Join the campaign of the current thread, or select from inline keyboard if in service thread |
-| `/campaign_leave` | Leave the campaign of the current thread, or select from inline keyboard if in service thread |
-| `/campaign_delete` | Archive the campaign (DM only). Tied to current thread, or inline keyboard filtered to DM's campaigns if in service thread |
-| `/service_thread` | **Toggle** service thread status for the current thread. If not service — marks it; if already service — unmarks it. |
-| `/steal` | DM only. Show cached available slots for the campaign (inline keyboard). DM picks a slot → starts a voting session immediately. In service thread: shows campaign selector first. |
+- `/vote` — привязана к кампании, **только DM** этой кампании.
+- `/saved` — привязана к кампании, без показа внутренних ID.
+- `/unsave` — привязана к кампании, **только DM**. Инлайн-клавиатура для выбора слота вместо ввода ID.
 
-#### Modified Commands — Global (not campaign-scoped)
+---
 
-- `/plan`, `/yes`, `/no`, `/prob`, `/get` — remain global, not tied to a specific campaign. `/plan` shows per-campaign slot availability (no auto-vote) and caches results in `AvailableSlot` table.
-- `/weekly` — global weekly planning reminders
+## Изменения в существующих сущностях
 
-#### Modified Commands — Campaign-scoped
+- **SavedGame** — добавить `CampaignId` (FK → Campaign, **not null**).
+- **VoteSession** — добавить `CampaignId` (FK → Campaign, **not null**).
+- **Response** — **без изменений**. Доступность глобальная, без привязки к кампании.
 
-- `/vote` — tied to specific campaign, **limited to DM** of that campaign only
-- `/saved` — tied to specific campaign, **no internal IDs shown** in output
-- `/unsave` — tied to specific campaign, **limited to DM** only. Uses inline keyboard to select which game slot to remove (instead of passing internal ID)
+---
 
-### Migration Strategy
+## Стратегия миграции
 
-- `CampaignId` is **not null** on `SavedGame`, `VoteSession` (not on `Response` — responses are global)
-- Existing data is dropped in the migration — DMs must configure campaigns from scratch
-- If dropping data is not possible in migration, create a temporary campaign named "Временная" and assign existing records to it
-- Breaking changes are allowed — no backward compatibility needed
+- `CampaignId` на `SavedGame` и `VoteSession` — **not null**.
+- Существующие данные **удаляются** в миграции. DM настраивают кампании с нуля.
+- Если удаление данных невозможно в миграции — создать временную кампанию «Временная» и привязать к ней существующие записи.
+- Ломающие изменения допускаются — обратная совместимость не нужна.
+
+---
+
+## Рефакторинг перед реализацией
+
+Перед началом работы над многокампанийной поддержкой нужен рефакторинг:
+
+- **Выделить `SlotCalculator`** — сервис для расчёта свободных слотов по кампаниям из общей таблицы `Response`.
+- **Упорядочить маршрутизацию колбэков** в `UpdateHandler` — стандартизировать разбор callback data.
+- **Стандартизировать паттерн привязки к кампании** — переиспользуемый хелпер для определения текущей кампании из контекста треда или показа инлайн-клавиатуры в служебных тредах.
+
+---
+
+## Порядок реализации
+
+1. Рефакторинг кодовой базы (SlotCalculator, маршрутизация колбэков, хелпер привязки к кампании).
+2. Отслеживание тредов: `ForumThread` + обработка служебных сообщений форума.
+3. Кампании: `Campaign`, `CampaignMember`, `ServiceThread` + команды `/campaign_new`, `/campaign_join`, `/campaign_leave`, `/campaign_delete`, `/service_thread`.
+4. Миграция БД: добавить `CampaignId` в `SavedGame` и `VoteSession`, удалить старые данные.
+5. Изменение `/plan`: после завершения заполнения — расчёт слотов по кампаниям, кэширование в `AvailableSlot`, вывод результатов.
+6. Команда `/steal`: быстрый выбор слота для голосования.
+7. Привязка `/vote`, `/saved`, `/unsave` к кампаниям.
+8. Проверки коллизий между кампаниями.
+9. Маршрутизация напоминаний в треды кампаний.

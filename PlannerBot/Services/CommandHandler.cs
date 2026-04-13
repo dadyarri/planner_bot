@@ -114,22 +114,25 @@ public class CommandHandler(
 
         if (suitableTime is not null)
         {
-            var today = timeZoneUtilities.GetMoscowDate().Add(suitableTime.Value.TimeOfDay);
+            // suitableTime is already in Moscow time from CheckIfDateIsAvailable
+            var moscowGameDateTime = suitableTime.Value;
+            var utcGameDateTime = timeZoneUtilities.ConvertToUtc(moscowGameDateTime);
             var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
             var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
 
             var sentMessage = await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text:
-                $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{timeZoneUtilities.FormatTime(today)}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
-                parseMode: ParseMode.Html, linkPreviewOptions: true
+                $"⭐ Боги благосклонны! Все герои собрались! Час битвы: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateVoteCancelKeyboard(msg.From!.Username!))
             );
 
             // Create voting session and store message ID
-            var votingMessage =
-                await availabilityManager.CreateVotingSession(timeZoneUtilities.ConvertToUtc(today), sentMessage);
-            if (votingMessage is not null)
+            var votingSession =
+                await availabilityManager.CreateVotingSession(utcGameDateTime, sentMessage, msg.From!.Username!);
+            if (votingSession is not null)
             {
-                votingMessage.MessageId = sentMessage.MessageId;
+                votingSession.MessageId = sentMessage.MessageId;
                 await db.SaveChangesAsync();
 
                 await bot.SetMessageReaction(

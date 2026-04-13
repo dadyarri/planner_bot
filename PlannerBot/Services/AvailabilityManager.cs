@@ -26,6 +26,9 @@ public class AvailabilityManager
     private readonly TimeZoneUtilities _timeZoneUtilities;
     private readonly ILogger<AvailabilityManager> _logger;
 
+    private static readonly TimeSpan VoteSessionTtl = TimeSpan.FromHours(24);
+    private static readonly TimeSpan VoteReminderDelay = TimeSpan.FromHours(12);
+
     private static readonly TimeSpan[] ReminderIntervals =
     [
         TimeSpan.FromHours(48), TimeSpan.FromHours(24), TimeSpan.FromHours(5), TimeSpan.FromHours(3),
@@ -285,76 +288,153 @@ public class AvailabilityManager
 
     /// <summary>
     /// Creates a voting session for a specific game datetime.
-    /// Returns the stored voting message containing message and chat IDs for tracking reactions.
+    /// Schedules expiry and reminder jobs. Returns the stored voting session.
     /// </summary>
-    public async Task<VoteSession?> CreateVotingSession(DateTime gameDateTime, Message message)
+    public async Task<VoteSession?> CreateVotingSession(DateTime gameDateTime, Message message,
+        string creatorUsername)
     {
+        var expiresAt = DateTime.UtcNow.Add(VoteSessionTtl);
         var voteSession = new VoteSession
         {
             ChatId = message.Chat.Id,
             GameDateTime = gameDateTime,
             ThreadId = message.MessageThreadId ?? 0,
             VoteCount = 0,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            ExpiresAt = expiresAt,
+            CreatorUsername = creatorUsername
         };
 
         await _db.VoteSessions.AddAsync(voteSession);
         await _db.SaveChangesAsync();
 
+        // Schedule expiry job
+        await _ticker.AddAsync(new TimeTickerEntity
+        {
+            Function = "expire_vote_session",
+            ExecutionTime = expiresAt,
+            Request = TickerHelper.CreateTickerRequest(new VoteSessionExpiryJobContext
+            {
+                VoteSessionId = voteSession.Id,
+                ChatId = message.Chat.Id,
+                ThreadId = message.MessageThreadId,
+                MessageId = message.MessageId
+            })
+        });
+
+        // Schedule non-voter reminder
+        var reminderTime = DateTime.UtcNow.Add(VoteReminderDelay);
+        if (reminderTime < expiresAt)
+        {
+            await _ticker.AddAsync(new TimeTickerEntity
+            {
+                Function = "send_vote_reminder",
+                ExecutionTime = reminderTime,
+                Request = TickerHelper.CreateTickerRequest(new VoteReminderJobContext
+                {
+                    VoteSessionId = voteSession.Id,
+                    ChatId = message.Chat.Id,
+                    ThreadId = message.MessageThreadId
+                })
+            });
+        }
+
         return voteSession;
     }
 
     /// <summary>
-    /// Increments vote count for a voting session and checks if threshold is reached.
-    /// Returns true if all active players have voted.
+    /// Records a user's vote and checks if threshold is reached.
+    /// Uses per-user tracking for deduplication. Returns true if all active players have voted.
     /// </summary>
-    public async Task<bool> IncrementVoteAndCheckThreshold(long votingMessageId)
+    public async Task<bool> IncrementVoteAndCheckThreshold(long votingSessionId, long userId)
     {
-        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
-        if (votingMessage is null)
+        // Check for duplicate vote
+        var existingVote = await _db.VoteSessionVotes
+            .AnyAsync(v => v.VoteSessionId == votingSessionId && v.UserId == userId);
+
+        if (existingVote)
             return false;
 
-        votingMessage.VoteCount++;
+        // Record the vote
+        await _db.VoteSessionVotes.AddAsync(new VoteSessionVote
+        {
+            VoteSessionId = votingSessionId,
+            UserId = userId,
+            VotedAt = DateTime.UtcNow
+        });
+
+        // Atomically increment vote count
+        await _db.VoteSessions
+            .Where(vs => vs.Id == votingSessionId)
+            .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount + 1));
+
+        await _db.SaveChangesAsync();
+
+        // Re-read the updated count
+        var updatedSession = await _db.VoteSessions.FirstOrDefaultAsync(vs => vs.Id == votingSessionId);
+        if (updatedSession is null)
+            return false;
 
         var activeUsersCount = await _db.Users
             .Where(u => u.IsActive)
             .CountAsync();
 
-        await _db.SaveChangesAsync();
-
-        return votingMessage.VoteCount >= activeUsersCount;
+        return updatedSession.VoteCount >= activeUsersCount;
     }
 
     /// <summary>
-    /// Decrements vote count for a voting session when a user removes their reaction.
+    /// Removes a user's vote when they remove their reaction.
     /// </summary>
-    public async Task DecrementVote(long votingMessageId)
+    public async Task DecrementVote(long votingSessionId, long userId)
     {
-        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
-        if (votingMessage is null)
+        var vote = await _db.VoteSessionVotes
+            .FirstOrDefaultAsync(v => v.VoteSessionId == votingSessionId && v.UserId == userId);
+
+        if (vote is null)
             return;
 
-        if (votingMessage.VoteCount > 0)
-        {
-            votingMessage.VoteCount--;
-            await _db.SaveChangesAsync();
-        }
+        _db.VoteSessionVotes.Remove(vote);
+
+        // Atomically decrement vote count (ensure non-negative)
+        await _db.VoteSessions
+            .Where(vs => vs.Id == votingSessionId && vs.VoteCount > 0)
+            .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount - 1));
+
+        await _db.SaveChangesAsync();
     }
 
     /// <summary>
-    /// Gets a voting message session by ID.
+    /// Gets a voting session by ID, including voter information.
     /// </summary>
-    public async Task<VoteSession?> GetVotingMessage(long votingMessageId)
+    public async Task<VoteSession?> GetVotingMessage(long votingSessionId)
     {
-        return await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
+        return await _db.VoteSessions
+            .Include(vs => vs.Votes)
+            .ThenInclude(v => v.User)
+            .FirstOrDefaultAsync(vm => vm.Id == votingSessionId);
     }
 
     /// <summary>
-    /// Deletes a voting message session (after threshold is reached or expires).
+    /// Gets voter usernames for a voting session.
     /// </summary>
-    public async Task DeleteVotingSession(long votingMessageId)
+    public async Task<List<string>> GetVoterUsernames(long votingSessionId)
     {
-        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingMessageId);
+        return await _db.VoteSessionVotes
+            .Where(v => v.VoteSessionId == votingSessionId)
+            .Select(v => v.User.Username)
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Deletes a voting session and its associated votes.
+    /// </summary>
+    public async Task DeleteVotingSession(long votingSessionId)
+    {
+        await _db.VoteSessionVotes
+            .Where(v => v.VoteSessionId == votingSessionId)
+            .ExecuteDeleteAsync();
+
+        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingSessionId);
         if (votingMessage is not null)
         {
             _db.VoteSessions.Remove(votingMessage);

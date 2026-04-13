@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace PlannerBot.Data;
 
 /// <summary>
@@ -13,4 +15,8 @@ public class VoteSession
     public DateTime GameDateTime { get; set; }
     public int VoteCount { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? ExpiresAt { get; set; }
+    [MaxLength(32)]
+    public string CreatorUsername { get; set; } = string.Empty;
+    public List<VoteSessionVote> Votes { get; set; } = [];
 }

@@ -183,18 +183,23 @@ public partial class UpdateHandler(
 
                         if (suitableTime is not null)
                         {
-                            date = date.Add(suitableTime.Value.TimeOfDay);
+                            // suitableTime is already in Moscow time from CheckIfDateIsAvailable
+                            var moscowGameDateTime = suitableTime.Value;
+                            var utcGameDateTime = timeZoneUtilities.ConvertToUtc(moscowGameDateTime);
+
                             var sentMessage = await bot.SendMessage(callbackQuery.Message!.Chat.Id,
                                 messageThreadId: callbackQuery.Message.MessageThreadId,
                                 text:
-                                $"⭐ Судьба совпала! {timeZoneUtilities.FormatDate(date)} братство объединено! Час кампании: <b>{timeZoneUtilities.FormatTime(date)}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
-                                parseMode: ParseMode.Html, linkPreviewOptions: true);
+                                $"⭐ Судьба совпала! {timeZoneUtilities.FormatDate(moscowGameDateTime)} братство объединено! Час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
+                                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                                replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateVoteCancelKeyboard(callbackQuery.From.Username!)));
 
                             // Create voting session and store message ID
-                            var votingMessage = await availabilityManager.CreateVotingSession(timeZoneUtilities.ConvertToUtc(date), sentMessage);
-                            if (votingMessage is not null)
+                            var votingSession = await availabilityManager.CreateVotingSession(
+                                utcGameDateTime, sentMessage, callbackQuery.From.Username!);
+                            if (votingSession is not null)
                             {
-                                votingMessage.MessageId = sentMessage.MessageId;
+                                votingSession.MessageId = sentMessage.MessageId;
                                 await db.SaveChangesAsync();
 
                                 await bot.SetMessageReaction(
@@ -204,6 +209,35 @@ public partial class UpdateHandler(
                             }
                         }
                     }
+
+                    break;
+                }
+            case "vote_cancel":
+                {
+                    var creatorUsername = split[1];
+
+                    if (creatorUsername != callbackQuery.From.Username)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Только создатель голосования может его отменить!");
+                        return;
+                    }
+
+                    var voteSession = await db.VoteSessions
+                        .FirstOrDefaultAsync(vs =>
+                            vs.ChatId == callbackQuery.Message!.Chat.Id &&
+                            vs.MessageId == callbackQuery.Message.Id);
+
+                    if (voteSession is not null)
+                    {
+                        await availabilityManager.DeleteVotingSession(voteSession.Id);
+                    }
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        "❌ Голосование отменено создателем",
+                        parseMode: ParseMode.Html);
 
                     break;
                 }
@@ -221,6 +255,11 @@ public partial class UpdateHandler(
         if (hasThumbsUpInNew == hasThumbsUpInOld)
             return;
 
+        // Filter out bot's own reactions
+        var me = await bot.GetMe();
+        if (reactionUpdated.User?.Id == me.Id)
+            return;
+
         var votingMessage = await db.VoteSessions
             .FirstOrDefaultAsync(vm =>
                 vm.ChatId == reactionUpdated.Chat.Id &&
@@ -229,7 +268,8 @@ public partial class UpdateHandler(
         if (votingMessage is null)
             return;
 
-        var user = await db.Users.FirstOrDefaultAsync(u => reactionUpdated.User != null && u.Username == reactionUpdated.User.Username);
+        var user = await db.Users.FirstOrDefaultAsync(u =>
+            reactionUpdated.User != null && u.Username == reactionUpdated.User.Username);
         if (user is null || !user.IsActive)
             return;
 
@@ -238,26 +278,33 @@ public partial class UpdateHandler(
         // Reaction was added
         if (hasThumbsUpInNew && !hasThumbsUpInOld)
         {
-            thresholdReached = await availabilityManager.IncrementVoteAndCheckThreshold(votingMessage.Id);
+            thresholdReached = await availabilityManager.IncrementVoteAndCheckThreshold(votingMessage.Id, user.Id);
         }
         // Reaction was removed
         else if (!hasThumbsUpInNew && hasThumbsUpInOld)
         {
-            await availabilityManager.DecrementVote(votingMessage.Id);
+            await availabilityManager.DecrementVote(votingMessage.Id, user.Id);
         }
 
         var activeUsersCount = await db.Users.Where(u => u.IsActive).CountAsync();
         var updatedVotingMessage = await availabilityManager.GetVotingMessage(votingMessage.Id);
 
-        if (updatedVotingMessage is not null)
+        if (updatedVotingMessage is not null && !thresholdReached)
         {
             var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(updatedVotingMessage.GameDateTime);
+            var voterNames = await availabilityManager.GetVoterUsernames(votingMessage.Id);
+            var voterList = voterNames.Count > 0
+                ? " — " + string.Join(", ", voterNames.Select(u => $"@{u}"))
+                : string.Empty;
+
             await bot.EditMessageText(
                 votingMessage.ChatId,
                 votingMessage.MessageId,
-                $"⭐ Судьба совпала! {timeZoneUtilities.FormatDate(moscowGameDateTime)} братство объединено! Час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 Голосов: {updatedVotingMessage.VoteCount}/{activeUsersCount}",
+                $"⭐ Судьба совпала! {timeZoneUtilities.FormatDate(moscowGameDateTime)} братство объединено! Час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 Голосов: {updatedVotingMessage.VoteCount}/{activeUsersCount}{voterList}",
                 parseMode: ParseMode.Html,
-                linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true });
+                linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true },
+                replyMarkup: new InlineKeyboardMarkup(
+                    keyboardGenerator.GenerateVoteCancelKeyboard(updatedVotingMessage.CreatorUsername)));
         }
 
         if (thresholdReached)

@@ -11,10 +11,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<User> Users { get; set; }
     public DbSet<SavedGame> SavedGame { get; set; }
     public DbSet<VoteSession> VoteSessions { get; set; }
+    public DbSet<VoteSessionVote> VoteSessionVotes { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<VoteSessionVote>()
+            .HasIndex(v => new { v.VoteSessionId, v.UserId })
+            .IsUnique();
 
         modelBuilder.ApplyConfiguration(new TimeTickerConfigurations<TimeTickerEntity>());
         modelBuilder.ApplyConfiguration(new CronTickerConfigurations<CronTickerEntity>());

@@ -187,26 +187,12 @@ public partial class UpdateHandler(
                             var moscowGameDateTime = suitableTime.Value;
                             var utcGameDateTime = timeZoneUtilities.ConvertToUtc(moscowGameDateTime);
 
-                            var sentMessage = await bot.SendMessage(callbackQuery.Message!.Chat.Id,
-                                messageThreadId: callbackQuery.Message.MessageThreadId,
-                                text:
-                                $"⭐ Судьба совпала! {timeZoneUtilities.FormatDate(moscowGameDateTime)} братство объединено! Час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 Голосуй за запись битвы в летописи!\n\n{activeMentions}",
-                                parseMode: ParseMode.Html, linkPreviewOptions: true,
-                                replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateVoteCancelKeyboard(callbackQuery.From.Username!)));
-
-                            // Create voting session and store message ID
-                            var votingSession = await availabilityManager.CreateVotingSession(
-                                utcGameDateTime, sentMessage, callbackQuery.From.Username!);
-                            if (votingSession is not null)
-                            {
-                                votingSession.MessageId = sentMessage.MessageId;
-                                await db.SaveChangesAsync();
-
-                                await bot.SetMessageReaction(
-                                    callbackQuery.Message.Chat.Id,
-                                    sentMessage.MessageId,
-                                    [new ReactionTypeEmoji { Emoji = "👍" }]);
-                            }
+                            await SendVotingMessage(
+                                callbackQuery.Message!.Chat.Id,
+                                callbackQuery.Message.MessageThreadId,
+                                utcGameDateTime,
+                                callbackQuery.From.Username!,
+                                activeMentions);
                         }
                     }
 
@@ -230,13 +216,14 @@ public partial class UpdateHandler(
 
                     if (voteSession is not null)
                     {
+                        await availabilityManager.CloseVotingSession(voteSession.Id, VoteOutcome.Canceled);
                         await availabilityManager.DeleteVotingSession(voteSession.Id);
                     }
 
                     await bot.EditMessageText(
                         callbackQuery.Message!.Chat.Id,
                         callbackQuery.Message.Id,
-                        "❌ Голосование отменено создателем",
+                        "🛑 Голосование отменено создателем — совет распущен",
                         parseMode: ParseMode.Html);
 
                     break;
@@ -246,26 +233,69 @@ public partial class UpdateHandler(
         await bot.AnswerCallbackQuery(callbackQuery.Id);
     }
 
+    /// <summary>
+    /// Sends a new voting message and creates the associated voting session.
+    /// This is the single place that creates voting messages — used by both
+    /// the "delete" callback (plan completion) and the /vote command.
+    /// </summary>
+    private async Task SendVotingMessage(
+        long chatId,
+        int? threadId,
+        DateTime utcGameDateTime,
+        string creatorUsername,
+        string activeMentions)
+    {
+        var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(utcGameDateTime);
+        var sentMessage = await bot.SendMessage(chatId,
+            messageThreadId: threadId,
+            text:
+            $"⚔️ Совет братства решает! {timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 — Поддержать запись битвы в летописи\n👎 — Отклонить этот час (вас исключат из напоминаний)\n\n{activeMentions}",
+            parseMode: ParseMode.Html, linkPreviewOptions: true,
+            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateVoteCancelKeyboard(creatorUsername)));
+
+        var votingSession = await availabilityManager.CreateVotingSession(
+            utcGameDateTime, sentMessage, creatorUsername);
+        if (votingSession is not null)
+        {
+            votingSession.MessageId = sentMessage.MessageId;
+            await db.SaveChangesAsync();
+
+            await bot.SetMessageReaction(
+                chatId,
+                sentMessage.MessageId,
+                [new ReactionTypeEmoji { Emoji = "👍" }]);
+        }
+    }
+
     private async Task OnMessageReaction(MessageReactionUpdated reactionUpdated)
     {
-        var hasThumbsUpInNew = reactionUpdated.NewReaction.Any(r => r is ReactionTypeEmoji { Emoji: "👍" });
-        var hasThumbsUpInOld = reactionUpdated.OldReaction.Any(r => r is ReactionTypeEmoji { Emoji: "👍" });
-
-        // If reaction wasn't added or removed, ignore
-        if (hasThumbsUpInNew == hasThumbsUpInOld)
-            return;
-
         // Filter out bot's own reactions
         var me = await bot.GetMe();
         if (reactionUpdated.User?.Id == me.Id)
             return;
 
-        var votingMessage = await db.VoteSessions
+        // Detect thumbs-up changes
+        var hasThumbsUpInNew = reactionUpdated.NewReaction.Any(r => r is ReactionTypeEmoji { Emoji: "👍" });
+        var hasThumbsUpInOld = reactionUpdated.OldReaction.Any(r => r is ReactionTypeEmoji { Emoji: "👍" });
+
+        // Detect thumbs-down changes
+        var hasThumbsDownInNew = reactionUpdated.NewReaction.Any(r => r is ReactionTypeEmoji { Emoji: "👎" });
+        var hasThumbsDownInOld = reactionUpdated.OldReaction.Any(r => r is ReactionTypeEmoji { Emoji: "👎" });
+
+        var thumbsUpChanged = hasThumbsUpInNew != hasThumbsUpInOld;
+        var thumbsDownChanged = hasThumbsDownInNew != hasThumbsDownInOld;
+
+        // If neither reaction changed, ignore
+        if (!thumbsUpChanged && !thumbsDownChanged)
+            return;
+
+        var votingSession = await db.VoteSessions
             .FirstOrDefaultAsync(vm =>
                 vm.ChatId == reactionUpdated.Chat.Id &&
-                vm.MessageId == reactionUpdated.MessageId);
+                vm.MessageId == reactionUpdated.MessageId &&
+                vm.Outcome == VoteOutcome.Pending);
 
-        if (votingMessage is null)
+        if (votingSession is null)
             return;
 
         var user = await db.Users.FirstOrDefaultAsync(u =>
@@ -273,53 +303,107 @@ public partial class UpdateHandler(
         if (user is null || !user.IsActive)
             return;
 
-        bool thresholdReached = false;
+        var outcome = VoteOutcome.Pending;
 
-        // Reaction was added
-        if (hasThumbsUpInNew && !hasThumbsUpInOld)
+        // Process thumbs-up vote
+        if (thumbsUpChanged)
         {
-            thresholdReached = await availabilityManager.IncrementVoteAndCheckThreshold(votingMessage.Id, user.Id);
-        }
-        // Reaction was removed
-        else if (!hasThumbsUpInNew && hasThumbsUpInOld)
-        {
-            await availabilityManager.DecrementVote(votingMessage.Id, user.Id);
-        }
-
-        var activeUsersCount = await db.Users.Where(u => u.IsActive).CountAsync();
-        var updatedVotingMessage = await availabilityManager.GetVotingMessage(votingMessage.Id);
-
-        if (updatedVotingMessage is not null && !thresholdReached)
-        {
-            var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(updatedVotingMessage.GameDateTime);
-            var voterNames = await availabilityManager.GetVoterUsernames(votingMessage.Id);
-            var voterList = voterNames.Count > 0
-                ? " — " + string.Join(", ", voterNames.Select(u => $"@{u}"))
-                : string.Empty;
-
-            await bot.EditMessageText(
-                votingMessage.ChatId,
-                votingMessage.MessageId,
-                $"⭐ Судьба совпала! {timeZoneUtilities.FormatDate(moscowGameDateTime)} братство объединено! Час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 Голосов: {updatedVotingMessage.VoteCount}/{activeUsersCount}{voterList}",
-                parseMode: ParseMode.Html,
-                linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true },
-                replyMarkup: new InlineKeyboardMarkup(
-                    keyboardGenerator.GenerateVoteCancelKeyboard(updatedVotingMessage.CreatorUsername)));
-        }
-
-        if (thresholdReached)
-        {
-            var messageInfo = new Message
+            if (hasThumbsUpInNew && !hasThumbsUpInOld)
             {
-                Chat = new Chat { Id = votingMessage.ChatId },
-                Id = votingMessage.MessageId,
-                MessageThreadId = votingMessage.ThreadId
-            };
+                outcome = await availabilityManager.RecordVoteAndCheckOutcome(
+                    votingSession.Id, user.Id, VoteType.For);
+            }
+            else if (!hasThumbsUpInNew && hasThumbsUpInOld)
+            {
+                await availabilityManager.RemoveVote(votingSession.Id, user.Id, VoteType.For);
+            }
+        }
 
-            await availabilityManager.SavePlannedGame(votingMessage.GameDateTime, messageInfo);
-            await availabilityManager.DeleteVotingSession(votingMessage.Id);
+        // Process thumbs-down vote
+        if (thumbsDownChanged)
+        {
+            if (hasThumbsDownInNew && !hasThumbsDownInOld)
+            {
+                outcome = await availabilityManager.RecordVoteAndCheckOutcome(
+                    votingSession.Id, user.Id, VoteType.Against);
+            }
+            else if (!hasThumbsDownInNew && hasThumbsDownInOld)
+            {
+                await availabilityManager.RemoveVote(votingSession.Id, user.Id, VoteType.Against);
+            }
+        }
 
-            await bot.DeleteMessage(votingMessage.ChatId, votingMessage.MessageId);
+        await HandleVoteOutcome(votingSession, outcome);
+    }
+
+    /// <summary>
+    /// Handles the result of a vote: updates the message for pending votes,
+    /// saves the game and closes the session when threshold is reached,
+    /// or shows no-consensus message when too many against votes.
+    /// </summary>
+    private async Task HandleVoteOutcome(VoteSession votingSession, VoteOutcome outcome)
+    {
+        switch (outcome)
+        {
+            case VoteOutcome.Saved:
+                {
+                    await availabilityManager.CloseVotingSession(votingSession.Id, VoteOutcome.Saved);
+
+                    var messageInfo = new Message
+                    {
+                        Chat = new Chat { Id = votingSession.ChatId },
+                        Id = votingSession.MessageId,
+                        MessageThreadId = votingSession.ThreadId
+                    };
+
+                    await availabilityManager.SavePlannedGame(votingSession.GameDateTime, messageInfo);
+                    await availabilityManager.DeleteVotingSession(votingSession.Id);
+
+                    await bot.EditMessageText(
+                        votingSession.ChatId,
+                        votingSession.MessageId,
+                        "✅ Совет единогласен — битва записана в летописи! ⚔️",
+                        parseMode: ParseMode.Html);
+                    break;
+                }
+            case VoteOutcome.NoConsensus:
+                {
+                    await availabilityManager.CloseVotingSession(votingSession.Id, VoteOutcome.NoConsensus);
+                    await availabilityManager.DeleteVotingSession(votingSession.Id);
+
+                    await bot.EditMessageText(
+                        votingSession.ChatId,
+                        votingSession.MessageId,
+                        "⚡ Совет не достиг согласия — слишком много голосов против. Битва не состоится в этот час.",
+                        parseMode: ParseMode.Html);
+                    break;
+                }
+            default: // Pending — update vote counts display
+                {
+                    var updatedSession = await availabilityManager.GetVotingSession(votingSession.Id);
+                    if (updatedSession is not null)
+                    {
+                        var messageText = await availabilityManager.BuildVotingMessageText(updatedSession);
+
+                        try
+                        {
+                            await bot.EditMessageText(
+                                votingSession.ChatId,
+                                votingSession.MessageId,
+                                messageText,
+                                parseMode: ParseMode.Html,
+                                linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true },
+                                replyMarkup: new InlineKeyboardMarkup(
+                                    keyboardGenerator.GenerateVoteCancelKeyboard(updatedSession.CreatorUsername)));
+                        }
+                        catch (ApiRequestException)
+                        {
+                            // Message content unchanged — Telegram API throws if text is identical
+                        }
+                    }
+
+                    break;
+                }
         }
     }
 

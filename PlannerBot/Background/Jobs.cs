@@ -36,6 +36,28 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
             .Select(r => r.User.Username)
             .ToListAsync(cancellationToken);
 
+        // Exclude users who voted against this time slot
+        var voteSession = await db.VoteSessions
+            .Include(vs => vs.Votes)
+            .FirstOrDefaultAsync(vs => vs.GameDateTime.Date == savedGame.DateTime.Date, cancellationToken);
+
+        if (voteSession is not null)
+        {
+            var againstUserIds = voteSession.Votes
+                .Where(v => v.Type == VoteType.Against)
+                .Select(v => v.UserId)
+                .ToHashSet();
+
+            var againstUsernames = await db.Users
+                .Where(u => againstUserIds.Contains(u.Id))
+                .Select(u => u.Username)
+                .ToListAsync(cancellationToken);
+
+            availablePlayers = availablePlayers
+                .Where(u => !againstUsernames.Contains(u))
+                .ToList();
+        }
+
         var availablePlayerTags = availablePlayers.Select(u => $"@{u}").ToList();
         var interval = TimeSpan.FromMinutes(context.Request.ReminderIntervalMinutes);
 
@@ -98,6 +120,10 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
             return;
         }
 
+        // Mark the outcome before deleting
+        voteSession.Outcome = VoteOutcome.Expired;
+        await db.SaveChangesAsync(cancellationToken);
+
         // Delete associated votes
         await db.VoteSessionVotes
             .Where(v => v.VoteSessionId == voteSession.Id)
@@ -111,7 +137,7 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
             await bot.EditMessageText(
                 context.Request.ChatId,
                 context.Request.MessageId,
-                "⏰ Голосование истекло — недостаточно голосов для записи битвы в летописи",
+                "⏳ Песочные часы истекли — голосование завершено без достаточного числа голосов. Битва не записана в летописи.",
                 parseMode: ParseMode.Html,
                 cancellationToken: cancellationToken);
         }
@@ -153,8 +179,8 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db)
         var message = $"""
                        {string.Join(", ", nonVoterTags)}
 
-                       📢 Голосование за запись битвы ожидает вашего голоса!
-                       Поставьте 👍 на сообщение выше, чтобы подтвердить запись.
+                       📢 Голосование ожидает вашего решения!
+                       Поставьте 👍 чтобы одобрить запись битвы, или 👎 чтобы отклонить.
                        """;
 
         await bot.SendMessage(context.Request.ChatId, messageThreadId: context.Request.ThreadId,

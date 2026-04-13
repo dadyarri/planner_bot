@@ -300,6 +300,8 @@ public class AvailabilityManager
             GameDateTime = gameDateTime,
             ThreadId = message.MessageThreadId ?? 0,
             VoteCount = 0,
+            AgainstCount = 0,
+            Outcome = VoteOutcome.Pending,
             CreatedAt = DateTime.UtcNow,
             ExpiresAt = expiresAt,
             CreatorUsername = creatorUsername
@@ -343,53 +345,52 @@ public class AvailabilityManager
     }
 
     /// <summary>
-    /// Records a user's vote and checks if threshold is reached.
-    /// Uses per-user tracking for deduplication. Returns true if all active players have voted.
+    /// Records a user's vote (for or against) and checks if a final outcome is reached.
+    /// Uses per-user tracking for deduplication. Returns the resolved outcome if any.
     /// </summary>
-    public async Task<bool> IncrementVoteAndCheckThreshold(long votingSessionId, long userId)
+    public async Task<VoteOutcome> RecordVoteAndCheckOutcome(long votingSessionId, long userId, VoteType voteType)
     {
         // Check for duplicate vote
         var existingVote = await _db.VoteSessionVotes
             .AnyAsync(v => v.VoteSessionId == votingSessionId && v.UserId == userId);
 
         if (existingVote)
-            return false;
+            return VoteOutcome.Pending;
 
         // Record the vote and persist it
         await _db.VoteSessionVotes.AddAsync(new VoteSessionVote
         {
             VoteSessionId = votingSessionId,
             UserId = userId,
+            Type = voteType,
             VotedAt = DateTime.UtcNow
         });
         await _db.SaveChangesAsync();
 
-        // Atomically increment vote count (commits immediately)
-        await _db.VoteSessions
-            .Where(vs => vs.Id == votingSessionId)
-            .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount + 1));
+        // Atomically increment the appropriate counter
+        if (voteType == VoteType.For)
+        {
+            await _db.VoteSessions
+                .Where(vs => vs.Id == votingSessionId)
+                .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount + 1));
+        }
+        else
+        {
+            await _db.VoteSessions
+                .Where(vs => vs.Id == votingSessionId)
+                .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.AgainstCount, vs => vs.AgainstCount + 1));
+        }
 
-        // Re-read the updated count
-        var updatedSession = await _db.VoteSessions
-            .AsNoTracking()
-            .FirstOrDefaultAsync(vs => vs.Id == votingSessionId);
-        if (updatedSession is null)
-            return false;
-
-        var activeUsersCount = await _db.Users
-            .Where(u => u.IsActive)
-            .CountAsync();
-
-        return updatedSession.VoteCount >= activeUsersCount;
+        return await EvaluateVoteOutcome(votingSessionId);
     }
 
     /// <summary>
     /// Removes a user's vote when they remove their reaction.
     /// </summary>
-    public async Task DecrementVote(long votingSessionId, long userId)
+    public async Task RemoveVote(long votingSessionId, long userId, VoteType voteType)
     {
         var vote = await _db.VoteSessionVotes
-            .FirstOrDefaultAsync(v => v.VoteSessionId == votingSessionId && v.UserId == userId);
+            .FirstOrDefaultAsync(v => v.VoteSessionId == votingSessionId && v.UserId == userId && v.Type == voteType);
 
         if (vote is null)
             return;
@@ -397,16 +398,52 @@ public class AvailabilityManager
         _db.VoteSessionVotes.Remove(vote);
         await _db.SaveChangesAsync();
 
-        // Atomically decrement vote count (commits immediately)
-        await _db.VoteSessions
-            .Where(vs => vs.Id == votingSessionId && vs.VoteCount > 0)
-            .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount - 1));
+        // Atomically decrement the appropriate counter
+        if (voteType == VoteType.For)
+        {
+            await _db.VoteSessions
+                .Where(vs => vs.Id == votingSessionId && vs.VoteCount > 0)
+                .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount - 1));
+        }
+        else
+        {
+            await _db.VoteSessions
+                .Where(vs => vs.Id == votingSessionId && vs.AgainstCount > 0)
+                .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.AgainstCount, vs => vs.AgainstCount - 1));
+        }
+    }
+
+    /// <summary>
+    /// Evaluates whether the voting session has reached a final outcome.
+    /// Threshold: all active users voted FOR. No-consensus: against votes >= half of active users.
+    /// </summary>
+    private async Task<VoteOutcome> EvaluateVoteOutcome(long votingSessionId)
+    {
+        var session = await _db.VoteSessions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(vs => vs.Id == votingSessionId);
+        if (session is null)
+            return VoteOutcome.Pending;
+
+        var activeUsersCount = await _db.Users
+            .Where(u => u.IsActive)
+            .CountAsync();
+
+        // All active users voted FOR
+        if (session.VoteCount >= activeUsersCount)
+            return VoteOutcome.Saved;
+
+        // Against votes >= half of active users — no consensus
+        if (session.AgainstCount > 0 && session.AgainstCount >= (activeUsersCount + 1) / 2)
+            return VoteOutcome.NoConsensus;
+
+        return VoteOutcome.Pending;
     }
 
     /// <summary>
     /// Gets a voting session by ID, including voter information.
     /// </summary>
-    public async Task<VoteSession?> GetVotingMessage(long votingSessionId)
+    public async Task<VoteSession?> GetVotingSession(long votingSessionId)
     {
         return await _db.VoteSessions
             .Include(vs => vs.Votes)
@@ -415,18 +452,67 @@ public class AvailabilityManager
     }
 
     /// <summary>
-    /// Gets voter usernames for a voting session.
+    /// Gets voter display info for a voting session, grouped by vote type.
     /// </summary>
-    public async Task<List<string>> GetVoterUsernames(long votingSessionId)
+    public async Task<(List<string> ForVoters, List<string> AgainstVoters)> GetVoterInfo(long votingSessionId)
     {
-        return await _db.VoteSessionVotes
+        var votes = await _db.VoteSessionVotes
             .Where(v => v.VoteSessionId == votingSessionId)
-            .Select(v => v.User.Username)
+            .Select(v => new { v.User.Username, v.Type })
             .ToListAsync();
+
+        var forVoters = votes.Where(v => v.Type == VoteType.For).Select(v => v.Username).ToList();
+        var againstVoters = votes.Where(v => v.Type == VoteType.Against).Select(v => v.Username).ToList();
+
+        return (forVoters, againstVoters);
     }
 
     /// <summary>
-    /// Deletes a voting session and its associated votes.
+    /// Builds the voting message text with current vote counts and voter lists.
+    /// This is the single source of truth for how voting messages are formatted.
+    /// </summary>
+    public async Task<string> BuildVotingMessageText(VoteSession session)
+    {
+        var moscowGameDateTime = _timeZoneUtilities.ConvertToMoscow(session.GameDateTime);
+        var activeUsersCount = await _db.Users.Where(u => u.IsActive).CountAsync();
+        var (forVoters, againstVoters) = await GetVoterInfo(session.Id);
+
+        var sb = new StringBuilder();
+        sb.AppendLine(
+            $"⚔️ Совет братства решает! {_timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{_timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>");
+        sb.AppendLine();
+        sb.AppendLine($"👍 За: {session.VoteCount}/{activeUsersCount}");
+
+        if (forVoters.Count > 0)
+            sb.AppendLine($"  └ {string.Join(", ", forVoters.Select(u => $"@{u}"))}");
+
+        if (session.AgainstCount > 0 || againstVoters.Count > 0)
+        {
+            sb.AppendLine($"👎 Против: {session.AgainstCount}");
+            if (againstVoters.Count > 0)
+                sb.AppendLine($"  └ {string.Join(", ", againstVoters.Select(u => $"@{u}"))}");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("👍 — Поддержать запись битвы в летописи");
+        sb.AppendLine("👎 — Отклонить этот час (вас исключат из напоминаний)");
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Closes a voting session with the given outcome.
+    /// Updates the session record but does not delete it (for history).
+    /// </summary>
+    public async Task CloseVotingSession(long votingSessionId, VoteOutcome outcome)
+    {
+        await _db.VoteSessions
+            .Where(vs => vs.Id == votingSessionId)
+            .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.Outcome, outcome));
+    }
+
+    /// <summary>
+    /// Deletes a voting session and its associated votes entirely.
     /// </summary>
     public async Task DeleteVotingSession(long votingSessionId)
     {

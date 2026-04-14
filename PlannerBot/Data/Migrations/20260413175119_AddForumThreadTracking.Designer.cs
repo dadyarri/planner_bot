@@ -2,18 +2,21 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using PlannerBot.Data;
 
 #nullable disable
 
-namespace PlannerBot.DataMigrations
+namespace PlannerBot.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260413175119_AddForumThreadTracking")]
+    partial class AddForumThreadTracking
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,80 +24,6 @@ namespace PlannerBot.DataMigrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("PlannerBot.Data.AvailableSlot", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("CampaignId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("ComputedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("DateTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CampaignId");
-
-                    b.ToTable("AvailableSlots");
-                });
-
-            modelBuilder.Entity("PlannerBot.Data.Campaign", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long>("DungeonMasterId")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("ForumThreadId")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DungeonMasterId");
-
-                    b.HasIndex("ForumThreadId");
-
-                    b.ToTable("Campaigns");
-                });
-
-            modelBuilder.Entity("PlannerBot.Data.CampaignMember", b =>
-                {
-                    b.Property<int>("CampaignId")
-                        .HasColumnType("integer");
-
-                    b.Property<long>("UserId")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTime>("JoinedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("CampaignId", "UserId");
-
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("CampaignId", "UserId")
-                        .IsUnique();
-
-                    b.ToTable("CampaignMembers");
-                });
 
             modelBuilder.Entity("PlannerBot.Data.ForumThread", b =>
                 {
@@ -158,36 +87,12 @@ namespace PlannerBot.DataMigrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<int>("CampaignId")
-                        .HasColumnType("integer");
-
                     b.Property<DateTime>("DateTime")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CampaignId");
-
                     b.ToTable("SavedGame");
-                });
-
-            modelBuilder.Entity("PlannerBot.Data.ServiceThread", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("ForumThreadId")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ForumThreadId")
-                        .IsUnique();
-
-                    b.ToTable("ServiceThreads");
                 });
 
             modelBuilder.Entity("PlannerBot.Data.User", b =>
@@ -227,9 +132,6 @@ namespace PlannerBot.DataMigrations
                     b.Property<int>("AgainstCount")
                         .HasColumnType("integer");
 
-                    b.Property<int>("CampaignId")
-                        .HasColumnType("integer");
-
                     b.Property<long>("ChatId")
                         .HasColumnType("bigint");
 
@@ -260,8 +162,6 @@ namespace PlannerBot.DataMigrations
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("CampaignId");
 
                     b.ToTable("VoteSessions");
                 });
@@ -474,55 +374,6 @@ namespace PlannerBot.DataMigrations
                     b.ToTable("TimeTickers", "ticker");
                 });
 
-            modelBuilder.Entity("PlannerBot.Data.AvailableSlot", b =>
-                {
-                    b.HasOne("PlannerBot.Data.Campaign", "Campaign")
-                        .WithMany()
-                        .HasForeignKey("CampaignId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Campaign");
-                });
-
-            modelBuilder.Entity("PlannerBot.Data.Campaign", b =>
-                {
-                    b.HasOne("PlannerBot.Data.User", "DungeonMaster")
-                        .WithMany()
-                        .HasForeignKey("DungeonMasterId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PlannerBot.Data.ForumThread", "ForumThread")
-                        .WithMany()
-                        .HasForeignKey("ForumThreadId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("DungeonMaster");
-
-                    b.Navigation("ForumThread");
-                });
-
-            modelBuilder.Entity("PlannerBot.Data.CampaignMember", b =>
-                {
-                    b.HasOne("PlannerBot.Data.Campaign", "Campaign")
-                        .WithMany("Members")
-                        .HasForeignKey("CampaignId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PlannerBot.Data.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Campaign");
-
-                    b.Navigation("User");
-                });
-
             modelBuilder.Entity("PlannerBot.Data.Response", b =>
                 {
                     b.HasOne("PlannerBot.Data.User", "User")
@@ -532,39 +383,6 @@ namespace PlannerBot.DataMigrations
                         .IsRequired();
 
                     b.Navigation("User");
-                });
-
-            modelBuilder.Entity("PlannerBot.Data.SavedGame", b =>
-                {
-                    b.HasOne("PlannerBot.Data.Campaign", "Campaign")
-                        .WithMany()
-                        .HasForeignKey("CampaignId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Campaign");
-                });
-
-            modelBuilder.Entity("PlannerBot.Data.ServiceThread", b =>
-                {
-                    b.HasOne("PlannerBot.Data.ForumThread", "ForumThread")
-                        .WithMany()
-                        .HasForeignKey("ForumThreadId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("ForumThread");
-                });
-
-            modelBuilder.Entity("PlannerBot.Data.VoteSession", b =>
-                {
-                    b.HasOne("PlannerBot.Data.Campaign", "Campaign")
-                        .WithMany()
-                        .HasForeignKey("CampaignId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Campaign");
                 });
 
             modelBuilder.Entity("PlannerBot.Data.VoteSessionVote", b =>
@@ -605,11 +423,6 @@ namespace PlannerBot.DataMigrations
                         .OnDelete(DeleteBehavior.NoAction);
 
                     b.Navigation("Parent");
-                });
-
-            modelBuilder.Entity("PlannerBot.Data.Campaign", b =>
-                {
-                    b.Navigation("Members");
                 });
 
             modelBuilder.Entity("PlannerBot.Data.VoteSession", b =>

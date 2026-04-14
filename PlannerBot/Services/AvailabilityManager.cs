@@ -24,9 +24,8 @@ public class AvailabilityManager
 
     /// <summary>
     /// Updates user's availability response for a specific date.
-    /// Returns suitable time if all users are available on that date.
     /// </summary>
-    public async Task<DateTime?> UpdateResponseForDate(
+    public async Task UpdateResponseForDate(
         Telegram.Bot.Types.User from,
         Availability availability,
         DateTime date,
@@ -79,51 +78,6 @@ public class AvailabilityManager
         }
 
         await _db.SaveChangesAsync();
-
-        var suitableTime = await CheckIfDateIsAvailable(utcDateTime);
-        return suitableTime;
-    }
-
-    /// <summary>
-    /// Checks if all active users are available on a date and returns their common available time.
-    /// Returns null if not all users have confirmed or any user declined.
-    /// </summary>
-    public async Task<DateTime?> CheckIfDateIsAvailable(DateTime date)
-    {
-        var activeUsersCount = await _db.Users
-            .Where(u => u.IsActive)
-            .CountAsync();
-
-        var dateOnly = date.Date;
-        var gameExistsOnDate = await _db.SavedGame
-            .Where(sg => sg.DateTime.Date == dateOnly)
-            .AnyAsync();
-
-        if (gameExistsOnDate)
-            return null;
-
-        var responses = await _db.Responses
-            .Where(r =>
-                r.DateTime.HasValue && r.DateTime.Value.Date == date.Date &&
-                r.User.IsActive)
-            .Select(r => new
-            {
-                r.Availability,
-                r.DateTime
-            })
-            .ToListAsync();
-
-        if (responses.Count != activeUsersCount || responses.Any(r =>
-                r.Availability is Availability.No or Availability.Unknown))
-            return null;
-
-        if (responses.Any(r => r.DateTime == null || r.DateTime.Value.TimeOfDay == TimeSpan.Zero))
-            return null;
-
-        var commonTime = responses
-            .Max(r => _timeZoneUtilities.ConvertToMoscow(r.DateTime!.Value));
-
-        return commonTime;
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using PlannerBot.Data;
 using Telegram.Bot;
@@ -23,6 +24,9 @@ public partial class UpdateHandler(
     VotingManager votingManager,
     GameScheduler gameScheduler,
     CommandHandler commandHandler,
+    SlotCalculator slotCalculator,
+    ForumThreadTracker forumThreadTracker,
+    CampaignManager campaignManager,
     AppDbContext db) : IUpdateHandler
 {
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
@@ -49,6 +53,37 @@ public partial class UpdateHandler(
 
     private async Task OnMessage(Message msg)
     {
+        // Handle forum topic service messages
+        if (msg.ForumTopicCreated is not null && msg.MessageThreadId is not null)
+        {
+            LogForumTopicCreated(logger, msg.Chat.Id, msg.MessageThreadId.Value);
+            await forumThreadTracker.OnForumTopicCreated(msg.Chat.Id, msg.MessageThreadId.Value,
+                msg.ForumTopicCreated.Name);
+            return;
+        }
+
+        if (msg.ForumTopicEdited is not null && msg.MessageThreadId is not null)
+        {
+            LogForumTopicEdited(logger, msg.Chat.Id, msg.MessageThreadId.Value);
+            await forumThreadTracker.OnForumTopicEdited(msg.Chat.Id, msg.MessageThreadId.Value,
+                msg.ForumTopicEdited.Name);
+            return;
+        }
+
+        if (msg.ForumTopicClosed is not null && msg.MessageThreadId is not null)
+        {
+            LogForumTopicClosed(logger, msg.Chat.Id, msg.MessageThreadId.Value);
+            await forumThreadTracker.OnForumTopicClosed(msg.Chat.Id, msg.MessageThreadId.Value);
+            return;
+        }
+
+        if (msg.ForumTopicReopened is not null && msg.MessageThreadId is not null)
+        {
+            LogForumTopicReopened(logger, msg.Chat.Id, msg.MessageThreadId.Value);
+            await forumThreadTracker.OnForumTopicReopened(msg.Chat.Id, msg.MessageThreadId.Value);
+            return;
+        }
+
         if (msg.Text is not { } text)
         {
             LogReceivedAMessageOfTypeMessagetype(logger, msg.Type);
@@ -77,37 +112,27 @@ public partial class UpdateHandler(
         LogReceivedCallbackQueryCqcommand(logger, split[0]);
         switch (split[0])
         {
-            case "plan":
+            case CallbackActions.Plan:
                 {
                     LogReceivedPlanCommand(logger);
                     var date = DateTime.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
-                    var username = split[2];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
-                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
+                    var userId = long.Parse(split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
 
                     await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                        new InlineKeyboardMarkup(keyboardGenerator.GenerateStatusKeyboard(date, username)));
+                        new InlineKeyboardMarkup(keyboardGenerator.GenerateStatusKeyboard(date, userId)));
 
                     break;
                 }
-            case "pstatus":
+            case CallbackActions.PlanStatus:
                 {
                     LogReceivedPlanCommand(logger);
                     var availability = int.Parse(split[1]);
                     var date = DateTime.ParseExact(split[2], "dd/MM/yyyy", CultureInfo.InvariantCulture);
-                    var username = split[3];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        LogWrongUserUsedPlanCommand(logger, username, callbackQuery.From.Username!);
-                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
+                    var userId = long.Parse(split[3]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
 
                     var utcDate = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
                     var selectedAvailability = (Availability)availability;
@@ -116,18 +141,18 @@ public partial class UpdateHandler(
                     {
                         await bot.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                             text: "🕐 Назови час присоединения к грядущей битве",
-                            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, username)));
+                            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, userId)));
                     }
                     else
                     {
                         await availabilityManager.UpdateResponseForDate(callbackQuery.From, selectedAvailability, utcDate);
                         await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                            new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
+                            new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId)));
                     }
 
                     break;
                 }
-            case "ptime":
+            case CallbackActions.PlanTime:
                 {
                     LogReceivedPtimeCommand(logger);
 
@@ -135,14 +160,9 @@ public partial class UpdateHandler(
                         DateTime.ParseExact(split[1], "dd/MM/yyyyTHH:mm", CultureInfo.InvariantCulture),
                         DateTimeKind.Utc
                     );
-                    var username = split[2];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        LogWrongUserUsedPtimeButtonDataCq(logger, username, callbackQuery.From.Username!);
-                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
+                    var userId = long.Parse(split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
 
                     var utcDateTime = timeZoneUtilities.ConvertToUtc(dateTime);
 
@@ -150,67 +170,103 @@ public partial class UpdateHandler(
 
                     await bot.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                         text: "🗓️ Примени заклинание предсказания - объяви о свободных днях:",
-                        replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
+                        replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId)));
 
                     break;
                 }
-            case "pback":
+            case CallbackActions.PlanBack:
                 {
                     LogReceivedPbackCommand(logger);
-                    var username = split[1];
-
-                    if (username != callbackQuery.From.Username)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id, "🚨 Эта кнопка защищена древним проклятием!");
-                        return;
-                    }
+                    var userId = long.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
 
                     await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                        new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(username)));
+                        new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId)));
                     break;
                 }
-            case "delete":
+            case CallbackActions.PlanDone:
                 {
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                     await availabilityManager.SetUnavailableForUnmarkedDays(callbackQuery.From.Username);
 
-                    var now = DateTime.UtcNow;
-                    var activeUsers = await db.Users.Where(u => u.IsActive).ToListAsync();
-                    var activeMentions = string.Join(" ", activeUsers.Select(u => $"@{u.Username}"));
+                    // Compute per-campaign free slots
+                    var slotsPerCampaign = await slotCalculator.GetAvailableSlotsForAllCampaigns();
 
-                    for (var i = 0; i < 8; i++)
+                    // Cache results — full replacement per campaign
+                    var computedAt = DateTime.UtcNow;
+                    foreach (var (campaign, slots) in slotsPerCampaign)
                     {
-                        var date = now.AddDays(i).Date;
-                        var suitableTime = await availabilityManager.CheckIfDateIsAvailable(date);
+                        // Delete old cached slots for this campaign
+                        await db.AvailableSlots
+                            .Where(s => s.CampaignId == campaign.Id)
+                            .ExecuteDeleteAsync();
 
-                        if (suitableTime is not null)
+                        // Insert new slots
+                        foreach (var slot in slots)
                         {
-                            // suitableTime is already in Moscow time from CheckIfDateIsAvailable
-                            var moscowGameDateTime = suitableTime.Value;
-                            var utcGameDateTime = timeZoneUtilities.ConvertToUtc(moscowGameDateTime);
-
-                            await votingManager.SendVotingMessage(
-                                callbackQuery.Message!.Chat.Id,
-                                callbackQuery.Message.MessageThreadId,
-                                utcGameDateTime,
-                                callbackQuery.From.Username!,
-                                activeMentions,
-                                keyboardGenerator);
+                            await db.AvailableSlots.AddAsync(new AvailableSlot
+                            {
+                                CampaignId = campaign.Id,
+                                DateTime = slot,
+                                ComputedAt = computedAt
+                            });
                         }
+                    }
+
+                    // Also clear cached slots for campaigns that no longer have any available slots
+                    var campaignIdsWithSlots = slotsPerCampaign.Keys.Select(c => c.Id).ToHashSet();
+                    var activeCampaignIds = await db.Campaigns
+                        .Where(c => c.IsActive)
+                        .Select(c => c.Id)
+                        .ToListAsync();
+                    foreach (var cid in activeCampaignIds.Where(id => !campaignIdsWithSlots.Contains(id)))
+                    {
+                        await db.AvailableSlots
+                            .Where(s => s.CampaignId == cid)
+                            .ExecuteDeleteAsync();
+                    }
+
+                    await db.SaveChangesAsync();
+
+                    // Send summary message
+                    if (slotsPerCampaign.Count > 0)
+                    {
+                        var sb = new StringBuilder();
+                        sb.AppendLine("📜 <b>Свободные слоты по кампаниям:</b>");
+                        sb.AppendLine();
+
+                        foreach (var (campaign, slots) in slotsPerCampaign)
+                        {
+                            var slotDescriptions = slots
+                                .Select(s => timeZoneUtilities.ConvertToMoscow(s))
+                                .Select(m => timeZoneUtilities.FormatDateTime(m));
+                            sb.AppendLine(
+                                $"<b>{campaign.ForumThread.Name}:</b> {string.Join(", ", slotDescriptions)}");
+                        }
+
+                        await bot.SendMessage(
+                            callbackQuery.Message!.Chat.Id,
+                            messageThreadId: callbackQuery.Message.MessageThreadId,
+                            text: sb.ToString(),
+                            parseMode: ParseMode.Html);
+                    }
+                    else
+                    {
+                        await bot.SendMessage(
+                            callbackQuery.Message!.Chat.Id,
+                            messageThreadId: callbackQuery.Message.MessageThreadId,
+                            text: "📜 Свободных слотов пока нет — не все герои объявили о своей доступности.",
+                            parseMode: ParseMode.Html);
                     }
 
                     break;
                 }
-            case "vote_cancel":
+            case CallbackActions.VoteCancel:
                 {
-                    var creatorUsername = split[1];
-
-                    if (creatorUsername != callbackQuery.From.Username)
-                    {
-                        await bot.AnswerCallbackQuery(callbackQuery.Id,
-                            "🚨 Только создатель голосования может его отменить!");
-                        return;
-                    }
+                    var creatorUserId = long.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, creatorUserId);
+                    if (user is null) return;
 
                     var voteSession = await db.VoteSessions
                         .FirstOrDefaultAsync(vs =>
@@ -229,6 +285,164 @@ public partial class UpdateHandler(
                         "🛑 Голосование отменено создателем — совет распущен",
                         parseMode: ParseMode.Html);
 
+                    break;
+                }
+            case CallbackActions.CampaignJoin:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    var joinError = await campaignManager.JoinCampaign(campaignId, user.Id);
+                    var joinResultText = joinError ?? $"⚔️ {user.Name} вступает в ряды кампании!";
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        joinResultText,
+                        parseMode: ParseMode.Html);
+
+                    break;
+                }
+            case CallbackActions.CampaignLeave:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    var leaveError = await campaignManager.LeaveCampaign(campaignId, user.Id);
+                    var leaveResultText = leaveError ?? $"👋 {user.Name} покидает ряды кампании.";
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        leaveResultText,
+                        parseMode: ParseMode.Html);
+
+                    break;
+                }
+            case CallbackActions.CampaignDelete:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    var deleteError = await campaignManager.DeleteCampaign(campaignId, user.Id);
+                    var deleteResultText = deleteError ?? "📕 Кампания завершена — летопись запечатана.";
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        deleteResultText,
+                        parseMode: ParseMode.Html);
+
+                    break;
+                }
+            case CallbackActions.StealCampaign:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    // Verify DM ownership
+                    var campaign = await db.Campaigns
+                        .Include(c => c.ForumThread)
+                        .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                    if (campaign is null)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Только Мастер Подземелий может призвать /steal!",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    // Delete the campaign picker message and show slot picker
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    await commandHandler.ShowSlotPickerForCampaign(
+                        callbackQuery.Message.Chat.Id,
+                        callbackQuery.Message.MessageThreadId,
+                        campaignId,
+                        user.Id);
+
+                    break;
+                }
+            case CallbackActions.StealSlot:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var slotUtc = DateTime.SpecifyKind(
+                        DateTime.ParseExact(split[2], "yyMMddHHmm", CultureInfo.InvariantCulture),
+                        DateTimeKind.Utc);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[3]));
+                    if (user is null) return;
+
+                    // Load campaign with thread and members
+                    var campaign = await db.Campaigns
+                        .Include(c => c.ForumThread)
+                        .Include(c => c.Members)
+                        .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                    if (campaign is null)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Только Мастер Подземелий может призвать /steal!",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    // Build mentions from active campaign members
+                    var memberUserIds = campaign.Members.Select(m => m.UserId).ToHashSet();
+                    var memberUsers = await db.Users
+                        .Where(u => memberUserIds.Contains(u.Id) && u.IsActive)
+                        .ToListAsync();
+                    var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
+
+                    // Delete the slot picker message
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+
+                    // Send voting message in the campaign's thread
+                    await votingManager.SendVotingMessage(
+                        campaign.ForumThread.ChatId,
+                        campaign.ForumThread.ThreadId,
+                        slotUtc,
+                        user.Id,
+                        activeMentions,
+                        keyboardGenerator,
+                        campaignId);
+
+                    break;
+                }
+            case CallbackActions.Dismiss:
+                {
+                    var userId = long.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
+                    if (user is null) return;
+
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                     break;
                 }
         }
@@ -390,5 +604,31 @@ public partial class UpdateHandler(
     {
         LogUnknownUpdateTypeUpdatetype(logger, update.Type);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Validates callback ownership by looking up the user by DB ID and comparing
+    /// their username to the callback sender. Returns null if validation fails.
+    /// </summary>
+    private async Task<Data.User?> ValidateCallbackOwnerAndResolveUser(
+        CallbackQuery callbackQuery, long userId)
+    {
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user is null)
+        {
+            await bot.AnswerCallbackQuery(callbackQuery.Id,
+                "⚠️ Сначала зарегистрируйся командой /unpause");
+            return null;
+        }
+
+        if (user.Username != callbackQuery.From.Username)
+        {
+            await bot.AnswerCallbackQuery(callbackQuery.Id,
+                "🚨 Эта кнопка защищена древним проклятием!");
+            return null;
+        }
+
+        return user;
     }
 }

@@ -46,7 +46,7 @@ public class VotingManager
     /// Schedules expiry and reminder jobs. Returns the stored voting session.
     /// </summary>
     public async Task<VoteSession?> CreateVotingSession(DateTime gameDateTime, Message message,
-        string creatorUsername, int campaignId)
+        long creatorId, int campaignId)
     {
         var expiresAt = DateTime.UtcNow.Add(VoteSessionTtl);
         var voteSession = new VoteSession
@@ -59,7 +59,7 @@ public class VotingManager
             Outcome = VoteOutcome.Pending,
             CreatedAt = DateTime.UtcNow,
             ExpiresAt = expiresAt,
-            CreatorUsername = creatorUsername,
+            CreatorId = creatorId,
             CampaignId = campaignId
         };
 
@@ -296,7 +296,7 @@ public class VotingManager
             parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new InlineKeyboardMarkup(keyboard.GenerateVoteCancelKeyboard(creatorUserId)));
 
-        var votingSession = await CreateVotingSession(utcGameDateTime, sentMessage, creator.Username, campaignId);
+        var votingSession = await CreateVotingSession(utcGameDateTime, sentMessage, creator.Id, campaignId);
         if (votingSession is not null)
         {
             votingSession.MessageId = sentMessage.MessageId;

@@ -577,7 +577,7 @@ public partial class UpdateHandler(
                                 parseMode: ParseMode.Html,
                                 linkPreviewOptions: new LinkPreviewOptions { IsDisabled = true },
                                 replyMarkup: new InlineKeyboardMarkup(
-                                    keyboardGenerator.GenerateVoteCancelKeyboard(updatedSession.CreatorUsername)));
+                                    keyboardGenerator.GenerateVoteCancelKeyboard(updatedSession.CreatorId)));
                         }
                         catch (ApiRequestException ex) when (ex.Message.Contains("message is not modified"))
                         {

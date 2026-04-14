@@ -39,8 +39,8 @@ public class VoteSession
     public VoteOutcome Outcome { get; set; } = VoteOutcome.Pending;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ExpiresAt { get; set; }
-    [MaxLength(32)]
-    public string CreatorUsername { get; set; } = string.Empty;
+    public User Creator { get; set; }
+    public long CreatorId { get; set; }
     public int CampaignId { get; set; }
     public Campaign Campaign { get; set; } = null!;
     public List<VoteSessionVote> Votes { get; set; } = [];

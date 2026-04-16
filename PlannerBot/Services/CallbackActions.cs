@@ -32,7 +32,7 @@ public static class CallbackActions
     public const string CampaignLeave = "cl";
 
     /// <summary>DM selected a campaign from the campaign picker to delete.</summary>
-    public const string CampaignDelete = "cd";
+    public const string CampaignPause = "cd";
 
     /// <summary>DM selected a campaign from the campaign picker for /steal (service thread flow).</summary>
     public const string StealCampaign = "sc";

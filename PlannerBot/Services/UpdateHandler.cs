@@ -321,14 +321,14 @@ public partial class UpdateHandler(
 
                     break;
                 }
-            case CallbackActions.CampaignDelete:
+            case CallbackActions.CampaignPause:
                 {
                     var campaignId = int.Parse(split[1]);
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
                     if (user is null) return;
 
                     var deleteError = await campaignManager.DeleteCampaign(campaignId, user.Id);
-                    var deleteResultText = deleteError ?? "📕 Кампания завершена — летопись запечатана.";
+                    var deleteResultText = deleteError ?? "📕 Кампания приостановлена — летопись запечатана до лучших времён.";
 
                     await bot.EditMessageText(
                         callbackQuery.Message!.Chat.Id,

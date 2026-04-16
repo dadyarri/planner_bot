@@ -83,8 +83,8 @@ public class CommandHandler(
             case "/campaign_leave":
                 await HandleCampaignLeaveCommand(msg);
                 break;
-            case "/campaign_delete":
-                await HandleCampaignDeleteCommand(msg);
+            case "/campaign_pause":
+                await HandleCampaignPauseCommand(msg);
                 break;
             case "/service_thread":
                 await HandleServiceThreadCommand(msg);
@@ -117,7 +117,7 @@ public class CommandHandler(
                 /campaign_new - Основать новую кампанию в этом потоке
                 /campaign_join - Вступить в ряды кампании
                 /campaign_leave - Покинуть ряды кампании
-                /campaign_delete - Завершить кампанию (только Мастер)
+                /campaign_pause - Приостановить кампанию (только Мастер)
                 /service_thread - Пометить поток как служебный
                 /steal - Захватить свободный слот для битвы (только Мастер)
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
@@ -714,11 +714,11 @@ public class CommandHandler(
             replyMarkup: new InlineKeyboardMarkup(keyboard));
     }
 
-    private async Task HandleCampaignDeleteCommand(Message msg)
+    private async Task HandleCampaignPauseCommand(Message msg)
     {
         var user = await EnsureUser(msg);
 
-        // If in a campaign thread, delete that campaign directly (DM-only)
+        // If in a campaign thread, pause that campaign directly (DM-only)
         if (msg.MessageThreadId is not null)
         {
             var campaign = await campaignManager.ResolveCampaignFromContext(
@@ -735,7 +735,7 @@ public class CommandHandler(
                 }
 
                 await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                    text: "📕 Кампания завершена — летопись запечатана.",
+                    text: "📕 Кампания приостановлена — летопись запечатана до лучших времён.",
                     parseMode: ParseMode.Html);
                 return;
             }
@@ -746,16 +746,16 @@ public class CommandHandler(
         if (campaigns.Count == 0)
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "⚠️ У тебя нет активных кампаний для завершения.",
+                text: "⚠️ У тебя нет активных кампаний для приостановки.",
                 parseMode: ParseMode.Html);
             return;
         }
 
         var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
-            CallbackActions.CampaignDelete, campaigns, user.Id);
+            CallbackActions.CampaignPause, campaigns, user.Id);
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-            text: "📕 Выбери кампанию для завершения:",
+            text: "📕 Выбери кампанию для приостановки:",
             parseMode: ParseMode.Html,
             replyMarkup: new InlineKeyboardMarkup(keyboard));
     }

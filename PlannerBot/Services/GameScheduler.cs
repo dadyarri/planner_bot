@@ -111,7 +111,11 @@ public class GameScheduler
         }
 
         var sb = new StringBuilder();
-        foreach (var game in _db.SavedGame.Where(sg => sg.CampaignId == campaignId))
+        var upcomingGames = await _db.SavedGame
+            .Where(sg => sg.CampaignId == campaignId && sg.DateTime > now)
+            .OrderBy(sg => sg.DateTime)
+            .ToListAsync();
+        foreach (var game in upcomingGames)
         {
             var gameDateTime = _timeZoneUtilities.ConvertToMoscow(game.DateTime);
             sb.AppendLine($"- {_timeZoneUtilities.FormatDateTime(gameDateTime)}");

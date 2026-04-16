@@ -78,6 +78,18 @@ public class GameScheduler
         await _db.AddAsync(savedGame);
         await _db.SaveChangesAsync();
 
+        // Remove the cached slot for this date so it no longer appears in the slot picker
+        var slotsToRemove = (await _db.AvailableSlots
+                .Where(s => s.CampaignId == campaignId)
+                .ToListAsync())
+            .Where(s => _timeZoneUtilities.ConvertToMoscow(s.DateTime).Date == moscowGameDate)
+            .ToList();
+        if (slotsToRemove.Count > 0)
+        {
+            _db.AvailableSlots.RemoveRange(slotsToRemove);
+            await _db.SaveChangesAsync();
+        }
+
         // Load campaign's forum thread for routing reminders to the campaign thread
         var campaign = await _db.Campaigns
             .Include(c => c.ForumThread)

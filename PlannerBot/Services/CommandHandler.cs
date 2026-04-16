@@ -89,9 +89,6 @@ public class CommandHandler(
             case "/service_thread":
                 await HandleServiceThreadCommand(msg);
                 break;
-            case "/steal":
-                await HandleStealCommand(msg);
-                break;
         }
     }
 
@@ -109,7 +106,7 @@ public class CommandHandler(
                 /unpause - Вернуться из отшельничества
 
                 /get - Узреть расписание братства и грядущий поход
-                /vote dd.mm.yyyy hh:mm - Начать голосование за запись битвы
+                /vote [dd.mm.yyyy hh:mm] - Захватить свободный слот или назначить конкретный час битвы (только Мастер)
                 /saved - Развернуть свиток начертанных битв
                 /unsave - Стереть запись о битве
 
@@ -119,7 +116,6 @@ public class CommandHandler(
                 /campaign_leave - Покинуть ряды кампании
                 /campaign_pause - Приостановить кампанию (только Мастер)
                 /service_thread - Пометить поток как служебный
-                /steal - Захватить свободный слот для битвы (только Мастер)
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
     }
@@ -303,19 +299,49 @@ public class CommandHandler(
 
     private async Task HandleVoteCommand(Message msg, string args)
     {
+        var user = await EnsureUser(msg);
+        var campaign = await campaignManager.ResolveCampaignFromContext(msg.Chat.Id, msg.MessageThreadId);
+
+        // No args → slot picker mode (former /steal behaviour)
         if (args == string.Empty)
         {
-            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: """
-                      ⚠️ Ты забыл указать дату и час битвы!
+            if (msg.MessageThreadId is not null)
+            {
+                if (campaign is not null)
+                {
+                    if (campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                            text: "⚠️ Только Мастер Подземелий может начать голосование!",
+                            parseMode: ParseMode.Html, linkPreviewOptions: true);
+                        return;
+                    }
 
-                      Используй заклинание так:
-                      /vote 28.01.2026 18:30
-                      """, parseMode: ParseMode.Html,
-                linkPreviewOptions: true);
+                    await ShowSlotPickerForCampaign(msg.Chat.Id, msg.MessageThreadId, campaign.Id, user.Id);
+                    return;
+                }
+            }
+
+            // Service thread or unknown — show DM campaign picker
+            var dmCampaigns = await campaignManager.GetDmCampaigns(user.Id);
+            if (dmCampaigns.Count == 0)
+            {
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: "⚠️ У тебя нет кампаний, которыми ты управляешь. Используй /campaign_new в потоке форума.",
+                    parseMode: ParseMode.Html, linkPreviewOptions: true);
+                return;
+            }
+
+            var slotPickerKeyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
+                CallbackActions.VotePickCampaign, dmCampaigns, user.Id);
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "🎯 Выбери кампанию, для которой хочешь захватить слот:",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new InlineKeyboardMarkup(slotPickerKeyboard));
             return;
         }
 
+        // Args provided → manual date/time mode
         if (!DateTime.TryParseExact(args, "dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var date))
         {
@@ -342,8 +368,6 @@ public class CommandHandler(
         }
 
         // Resolve campaign from current thread
-        var user = await EnsureUser(msg);
-        var campaign = await campaignManager.ResolveCampaignFromContext(msg.Chat.Id, msg.MessageThreadId);
         if (campaign is null)
         {
             // Not in a campaign thread — show DM campaign picker with the target timestamp embedded
@@ -788,49 +812,6 @@ public class CommandHandler(
             text: text, parseMode: ParseMode.Html);
     }
 
-    private async Task HandleStealCommand(Message msg)
-    {
-        var user = await EnsureUser(msg);
-
-        // In a campaign thread — show slots for that campaign (DM-only)
-        if (msg.MessageThreadId is not null)
-        {
-            var campaign = await campaignManager.ResolveCampaignFromContext(
-                msg.Chat.Id, msg.MessageThreadId);
-
-            if (campaign is not null)
-            {
-                if (campaign.DungeonMasterId != user.Id)
-                {
-                    await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                        text: "⚠️ Только Мастер Подземелий может призвать /steal!",
-                        parseMode: ParseMode.Html);
-                    return;
-                }
-
-                await ShowSlotPickerForCampaign(msg.Chat.Id, msg.MessageThreadId, campaign.Id, user.Id);
-                return;
-            }
-        }
-
-        // Service thread or unknown thread — show campaign picker filtered to DM campaigns
-        var dmCampaigns = await campaignManager.GetDmCampaigns(user.Id);
-        if (dmCampaigns.Count == 0)
-        {
-            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "⚠️ У тебя нет кампаний, которыми ты управляешь.",
-                parseMode: ParseMode.Html);
-            return;
-        }
-
-        var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
-            CallbackActions.StealCampaign, dmCampaigns, user.Id);
-
-        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-            text: "🎯 Выбери кампанию, для которой хочешь захватить слот:",
-            parseMode: ParseMode.Html,
-            replyMarkup: new InlineKeyboardMarkup(keyboard));
-    }
 
     /// <summary>
     /// Shows the slot picker for a campaign, filtering out past slots.

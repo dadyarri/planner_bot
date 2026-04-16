@@ -34,11 +34,11 @@ public static class CallbackActions
     /// <summary>DM selected a campaign from the campaign picker to delete.</summary>
     public const string CampaignPause = "cd";
 
-    /// <summary>DM selected a campaign from the campaign picker for /steal (service thread flow).</summary>
-    public const string StealCampaign = "sc";
+    /// <summary>DM selected a campaign from the campaign picker for /vote with no args (service thread flow).</summary>
+    public const string VotePickCampaign = "vpc";
 
-    /// <summary>DM selected an available slot from the slot picker for /steal.</summary>
-    public const string StealSlot = "ss";
+    /// <summary>DM selected an available slot from the slot picker for /vote.</summary>
+    public const string VotePickSlot = "vps";
 
     /// <summary>User pressed a cancel/dismiss button on a picker keyboard.</summary>
     public const string Dismiss = "x";

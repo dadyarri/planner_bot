@@ -338,7 +338,7 @@ public partial class UpdateHandler(
 
                     break;
                 }
-            case CallbackActions.StealCampaign:
+            case CallbackActions.VotePickCampaign:
                 {
                     var campaignId = int.Parse(split[1]);
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
@@ -364,7 +364,7 @@ public partial class UpdateHandler(
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
                             callbackQuery.Message.Id,
-                            "⚠️ Только Мастер Подземелий может призвать /steal!",
+                            "⚠️ Только Мастер Подземелий может начать голосование!",
                             parseMode: ParseMode.Html);
                         break;
                     }
@@ -379,7 +379,7 @@ public partial class UpdateHandler(
 
                     break;
                 }
-            case CallbackActions.StealSlot:
+            case CallbackActions.VotePickSlot:
                 {
                     var campaignId = int.Parse(split[1]);
                     var slotUtc = DateTime.SpecifyKind(
@@ -409,7 +409,7 @@ public partial class UpdateHandler(
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
                             callbackQuery.Message.Id,
-                            "⚠️ Только Мастер Подземелий может призвать /steal!",
+                            "⚠️ Только Мастер Подземелий может начать голосование!",
                             parseMode: ParseMode.Html);
                         break;
                     }
@@ -860,3 +860,4 @@ public partial class UpdateHandler(
         return user;
     }
 }
+

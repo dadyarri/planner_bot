@@ -44,8 +44,7 @@ All foundational multi-campaign support is implemented. Below is a summary of wh
 | `/plan`                   | Anyone | Inline calendar for the next 8 days. On "Done": computes per-campaign slots, caches to `AvailableSlot`, posts summary.            |
 | `/pause` / `/unpause`     | Anyone | Toggle `User.IsActive` globally.                                                                                                  |
 | `/weekly`                 | Anyone | Schedule a weekly Saturday 21:00 UTC `/plan` reminder (cron job).                                                                |
-| `/vote dd.MM.yyyy HH:mm`  | DM     | Manually start a voting session for the current campaign. DM-only.                                                                |
-| `/steal`                  | DM     | Pick a cached available slot and instantly start a vote for the current campaign.                                                 |
+| `/vote [dd.MM.yyyy HH:mm]`| DM     | Start a vote. Without args: pick a cached available slot (slot picker). With timestamp: manual date entry. In a service thread: shows a campaign picker first. DM-only. |
 | `/saved`                  | Anyone | List upcoming saved games for the current campaign.                                                                               |
 | `/unsave`                 | DM     | Inline keyboard to delete a saved game and cancel its reminders. DM-only.                                                        |
 | `/campaign_new`           | Anyone | Create a campaign in the current thread (sender becomes DM).                                                                      |

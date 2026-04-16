@@ -265,7 +265,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     }
 
     /// <summary>
-    /// Generates a slot picker keyboard for /steal.
+    /// Generates a slot picker keyboard for /vote (no-args mode).
     /// Each button shows the slot date/time in Moscow time and embeds campaign ID, slot datetime, and user ID.
     /// Uses compact datetime format (yyMMddHHmm) to stay within 64-byte callback data limit.
     /// Includes a cancel button at the bottom.
@@ -281,7 +281,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
                 {
                     InlineKeyboardButton.WithCallbackData(
                         $"🗓️ {timeZoneUtilities.FormatDateTime(moscow)}",
-                        $"{CallbackActions.StealSlot};{campaignId};{s.DateTime:yyMMddHHmm};{userId}")
+                        $"{CallbackActions.VotePickSlot};{campaignId};{s.DateTime:yyMMddHHmm};{userId}")
                 };
             })
             .ToList();

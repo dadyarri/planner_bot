@@ -415,10 +415,28 @@ public partial class UpdateHandler(
                     }
 
                     // Build mentions from active campaign members
-                    var memberUserIds = campaign.Members.Select(m => m.UserId).ToHashSet();
+                    var memberUserIds = campaign.Members.Select(m => m.UserId).ToList();
                     var memberUsers = await db.Users
                         .Where(u => memberUserIds.Contains(u.Id) && u.IsActive)
                         .ToListAsync();
+
+                    // Collision detection
+                    var conflictingCampaigns = await commandHandler.GetConflictingCampaignNames(
+                        campaignId, slotUtc, memberUsers.Select(u => u.Id).ToList());
+
+                    if (conflictingCampaigns.Count > 0)
+                    {
+                        var conflictList = string.Join("\n", conflictingCampaigns.Select(n => $"  — {n}"));
+                        var collisionKeyboard = keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            $"⚠️ Внимание, Мастер! В этот день уже записаны битвы в других кампаниях:\n\n{conflictList}\n\nНекоторые воины могут быть заняты. Продолжить голосование?",
+                            parseMode: ParseMode.Html,
+                            replyMarkup: new InlineKeyboardMarkup(collisionKeyboard));
+                        break;
+                    }
+
                     var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
 
                     // Delete the slot picker message
@@ -434,6 +452,222 @@ public partial class UpdateHandler(
                         keyboardGenerator,
                         campaignId);
 
+                    break;
+                }
+            case CallbackActions.VoteConfirm:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var slotUtc = DateTime.SpecifyKind(
+                        DateTime.ParseExact(split[2], "yyMMddHHmm", CultureInfo.InvariantCulture),
+                        DateTimeKind.Utc);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[3]));
+                    if (user is null) return;
+
+                    var campaign = await db.Campaigns
+                        .Include(c => c.ForumThread)
+                        .Include(c => c.Members)
+                        .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                    if (campaign is null)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Только Мастер может начать голосование!");
+                        break;
+                    }
+
+                    // Build mentions
+                    var memberUserIds = campaign.Members.Select(m => m.UserId).ToList();
+                    var memberUsers = await db.Users
+                        .Where(u => memberUserIds.Contains(u.Id) && u.IsActive)
+                        .ToListAsync();
+                    var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
+
+                    // Delete the collision warning message
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+
+                    // Send voting message in the campaign's thread
+                    await votingManager.SendVotingMessage(
+                        campaign.ForumThread.ChatId,
+                        campaign.ForumThread.ThreadId,
+                        slotUtc,
+                        user.Id,
+                        activeMentions,
+                        keyboardGenerator,
+                        campaignId);
+
+                    break;
+                }
+            case CallbackActions.VoteAbort:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    break;
+                }
+            case CallbackActions.UnsaveGame:
+                {
+                    var savedGameId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    // Verify DM rights
+                    var game = await db.SavedGame
+                        .Include(sg => sg.Campaign)
+                        .FirstOrDefaultAsync(sg => sg.Id == savedGameId);
+
+                    if (game is null)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "🔍 Битва уже вычеркнута из летописи.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (game.Campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Только Мастер может удалить запись о битве!");
+                        break;
+                    }
+
+                    await commandHandler.DeleteSavedGameAndReminders(savedGameId);
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        "🗡️ Битва вычеркнута из летописи.",
+                        parseMode: ParseMode.Html);
+                    break;
+                }
+            case CallbackActions.VoteCampaignPick:
+                {
+                    // DM picked a campaign from service-thread /vote → collision check, then fire vote
+                    var campaignId = int.Parse(split[1]);
+                    var slotUtc = DateTime.SpecifyKind(
+                        DateTime.ParseExact(split[2], "yyMMddHHmm", CultureInfo.InvariantCulture),
+                        DateTimeKind.Utc);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[3]));
+                    if (user is null) return;
+
+                    var campaign = await db.Campaigns
+                        .Include(c => c.ForumThread)
+                        .Include(c => c.Members)
+                        .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                    if (campaign is null)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Только Мастер Подземелий может начать голосование!");
+                        break;
+                    }
+
+                    // Build active member list
+                    var memberUserIds = campaign.Members.Select(m => m.UserId).ToList();
+                    var memberUsers = await db.Users
+                        .Where(u => memberUserIds.Contains(u.Id) && u.IsActive)
+                        .ToListAsync();
+
+                    // Collision detection
+                    var conflictingCampaigns = await commandHandler.GetConflictingCampaignNames(
+                        campaignId, slotUtc, memberUsers.Select(u => u.Id).ToList());
+
+                    if (conflictingCampaigns.Count > 0)
+                    {
+                        var conflictList = string.Join("\n", conflictingCampaigns.Select(n => $"  — {n}"));
+                        var collisionKeyboard = keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            $"⚠️ Внимание, Мастер! В этот день уже записаны битвы в других кампаниях:\n\n{conflictList}\n\nНекоторые воины могут быть заняты. Продолжить голосование?",
+                            parseMode: ParseMode.Html,
+                            replyMarkup: new InlineKeyboardMarkup(collisionKeyboard));
+                        break;
+                    }
+
+                    var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+
+                    await votingManager.SendVotingMessage(
+                        campaign.ForumThread.ChatId,
+                        campaign.ForumThread.ThreadId,
+                        slotUtc,
+                        user.Id,
+                        activeMentions,
+                        keyboardGenerator,
+                        campaignId);
+
+                    break;
+                }
+            case CallbackActions.SavedCampaignPick:
+                {
+                    // User picked a campaign from service-thread /saved → send saved games list
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    await commandHandler.SendSavedGamesForCampaign(
+                        callbackQuery.Message.Chat.Id,
+                        callbackQuery.Message.MessageThreadId,
+                        campaignId);
+                    break;
+                }
+            case CallbackActions.UnsaveCampaignPick:
+                {
+                    // DM picked a campaign from service-thread /unsave → show unsave keyboard
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    var campaign = await db.Campaigns
+                        .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                    if (campaign is null)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Только Мастер Подземелий может стереть запись о битве!");
+                        break;
+                    }
+
+                    await commandHandler.ShowUnsaveKeyboardForCampaign(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.MessageThreadId,
+                        campaignId,
+                        user.Id,
+                        editMessageId: callbackQuery.Message.Id);
                     break;
                 }
             case CallbackActions.Dismiss:

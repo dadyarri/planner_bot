@@ -48,6 +48,7 @@ public class GameScheduler
     /// Saves a game and schedules reminders at specified intervals before the game.
     /// Returns the message text to display to the user (success or error).
     /// Does not send any Telegram messages — caller is responsible for display.
+    /// Reminders are routed to the campaign's ForumThread (Phase 9).
     /// </summary>
     public async Task<string> SavePlannedGame(DateTime dateTime, Message message, int campaignId)
     {
@@ -60,8 +61,8 @@ public class GameScheduler
 
         await _db.SavedGame.Where(sg => sg.DateTime <= now.Date).ExecuteDeleteAsync();
 
-        // Check if game already exists on the same day (timezone-aware)
-        var allGames = await _db.SavedGame.ToListAsync();
+        // Check if game already exists on the same day (timezone-aware) for this campaign
+        var allGames = await _db.SavedGame.Where(sg => sg.CampaignId == campaignId).ToListAsync();
         var moscowGameDate = _timeZoneUtilities.ConvertToMoscow(dateTimeUtc).Date;
         var existingGameOnDate = allGames.Any(sg =>
             _timeZoneUtilities.ConvertToMoscow(sg.DateTime).Date == moscowGameDate);
@@ -77,6 +78,14 @@ public class GameScheduler
         await _db.AddAsync(savedGame);
         await _db.SaveChangesAsync();
 
+        // Load campaign's forum thread for routing reminders to the campaign thread
+        var campaign = await _db.Campaigns
+            .Include(c => c.ForumThread)
+            .FirstAsync(c => c.Id == campaignId);
+
+        var reminderChatId = campaign.ForumThread.ChatId;
+        var reminderThreadId = campaign.ForumThread.ThreadId;
+
         var timeUntilGame = dateTimeUtc - DateTime.UtcNow;
 
         foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
@@ -91,8 +100,8 @@ public class GameScheduler
                 Request = TickerHelper.CreateTickerRequest(new SendReminderJobContext
                 {
                     ReminderIntervalMinutes = reminderIntervalMinutes,
-                    ChatId = message.Chat.Id,
-                    ThreadId = message.MessageThreadId,
+                    ChatId = reminderChatId,
+                    ThreadId = reminderThreadId,
                     SavedGameId = savedGame.Id
                 }),
             });
@@ -102,7 +111,7 @@ public class GameScheduler
         }
 
         var sb = new StringBuilder();
-        foreach (var game in _db.SavedGame)
+        foreach (var game in _db.SavedGame.Where(sg => sg.CampaignId == campaignId))
         {
             var gameDateTime = _timeZoneUtilities.ConvertToMoscow(game.DateTime);
             sb.AppendLine($"- {_timeZoneUtilities.FormatDateTime(gameDateTime)}");

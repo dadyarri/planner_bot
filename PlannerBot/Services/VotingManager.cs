@@ -178,7 +178,7 @@ public class VotingManager
 
     /// <summary>
     /// Evaluates whether the voting session has reached a final outcome.
-    /// Threshold: all active users voted FOR. No-consensus: against votes >= half of active users.
+    /// Threshold: all active campaign members voted FOR. No-consensus: against votes >= half of campaign members.
     /// </summary>
     private async Task<VoteOutcome> EvaluateVoteOutcome(long votingSessionId)
     {
@@ -188,11 +188,14 @@ public class VotingManager
         if (session is null)
             return VoteOutcome.Pending;
 
-        var activeUsersCount = await _db.Users
-            .Where(u => u.IsActive)
+        var activeUsersCount = await _db.CampaignMembers
+            .Where(cm => cm.CampaignId == session.CampaignId && cm.User.IsActive)
             .CountAsync();
 
-        // All active users voted FOR
+        if (activeUsersCount <= 0)
+            return VoteOutcome.Pending;
+
+        // All active campaign members voted FOR
         if (session.VoteCount >= activeUsersCount)
             return VoteOutcome.Saved;
 
@@ -237,7 +240,9 @@ public class VotingManager
     public async Task<string> BuildVotingMessageText(VoteSession session)
     {
         var moscowGameDateTime = _timeZoneUtilities.ConvertToMoscow(session.GameDateTime);
-        var activeUsersCount = await _db.Users.Where(u => u.IsActive).CountAsync();
+        var activeUsersCount = await _db.CampaignMembers
+            .Where(cm => cm.CampaignId == session.CampaignId && cm.User.IsActive)
+            .CountAsync();
         var (forVoters, againstVoters) = await GetVoterInfo(session.Id);
 
         var sb = new StringBuilder();

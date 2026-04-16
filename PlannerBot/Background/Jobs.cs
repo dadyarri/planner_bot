@@ -193,8 +193,14 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
 
         var votedUserIds = voteSession.Votes.Select(v => v.UserId).ToHashSet();
 
+        // Only remind active campaign members who haven't voted yet
+        var campaignMemberIds = await db.CampaignMembers
+            .Where(cm => cm.CampaignId == voteSession.CampaignId)
+            .Select(cm => cm.UserId)
+            .ToListAsync(cancellationToken);
+
         var nonVoters = await db.Users
-            .Where(u => u.IsActive && !votedUserIds.Contains(u.Id))
+            .Where(u => campaignMemberIds.Contains(u.Id) && u.IsActive && !votedUserIds.Contains(u.Id))
             .Select(u => u.Username)
             .ToListAsync(cancellationToken);
 

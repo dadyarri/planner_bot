@@ -42,4 +42,22 @@ public static class CallbackActions
 
     /// <summary>User pressed a cancel/dismiss button on a picker keyboard.</summary>
     public const string Dismiss = "x";
+
+    /// <summary>DM selected a saved game from the unsave picker to delete.</summary>
+    public const string UnsaveGame = "ug";
+
+    /// <summary>DM confirmed proceeding with a vote despite scheduling collision.</summary>
+    public const string VoteConfirm = "vco";
+
+    /// <summary>DM aborted a vote after seeing a scheduling collision warning.</summary>
+    public const string VoteAbort = "va";
+
+    /// <summary>DM selected a campaign from the picker for /vote in a service thread (redirects to slot picker).</summary>
+    public const string VoteCampaignPick = "vcp";
+
+    /// <summary>User selected a campaign from the picker for /saved in a service thread.</summary>
+    public const string SavedCampaignPick = "scp";
+
+    /// <summary>DM selected a campaign from the picker for /unsave in a service thread.</summary>
+    public const string UnsaveCampaignPick = "ucp";
 }

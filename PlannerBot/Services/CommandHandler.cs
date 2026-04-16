@@ -342,11 +342,34 @@ public class CommandHandler(
         }
 
         // Resolve campaign from current thread
+        var user = await EnsureUser(msg);
         var campaign = await campaignManager.ResolveCampaignFromContext(msg.Chat.Id, msg.MessageThreadId);
         if (campaign is null)
         {
+            // Not in a campaign thread — show DM campaign picker with the target timestamp embedded
+            var dmCampaigns = await campaignManager.GetDmCampaigns(user.Id);
+            if (dmCampaigns.Count == 0)
+            {
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: "⚠️ У тебя нет кампаний, которыми ты управляешь. Используй /campaign_new в потоке форума.",
+                    parseMode: ParseMode.Html, linkPreviewOptions: true);
+                return;
+            }
+
+            var pickerKeyboard = keyboardGenerator.GenerateVoteCampaignPickerKeyboard(
+                dmCampaigns, utcGameDateTime, user.Id);
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "⚠️ Эту команду можно использовать только в потоке кампании.",
+                text: $"🗡️ Выбери кампанию для голосования за {timeZoneUtilities.FormatDateTime(timeZoneUtilities.ConvertToMoscow(utcGameDateTime))}:",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new InlineKeyboardMarkup(pickerKeyboard));
+            return;
+        }
+
+        // DM-only
+        if (campaign.DungeonMasterId != user.Id)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ Только Мастер Подземелий может начать голосование в этой кампании!",
                 parseMode: ParseMode.Html, linkPreviewOptions: true);
             return;
         }
@@ -359,11 +382,31 @@ public class CommandHandler(
         var memberUsers = await db.Users
             .Where(u => memberUserIds.Contains(u.Id) && u.IsActive)
             .ToListAsync();
-        var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
 
-        var user = await EnsureUser(msg);
+        // Collision detection
+        var conflictingCampaigns = await GetConflictingCampaignNames(
+            campaign.Id, utcGameDateTime, memberUsers.Select(u => u.Id).ToList());
+
+        if (conflictingCampaigns.Count > 0)
+        {
+            var conflictList = string.Join("\n", conflictingCampaigns.Select(n => $"  — {n}"));
+            var keyboard = keyboardGenerator.GenerateVoteCollisionKeyboard(campaign.Id, utcGameDateTime, user.Id);
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: $"""
+                       ⚠️ Внимание, Мастер! В этот день уже записаны битвы в других кампаниях:
+
+                       {conflictList}
+
+                       Некоторые воины могут быть заняты. Продолжить голосование?
+                       """,
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new InlineKeyboardMarkup(keyboard));
+            return;
+        }
+
+        var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
         await votingManager.SendVotingMessage(
-            msg.Chat.Id, msg.MessageThreadId, utcGameDateTime,
+            campaign.ForumThread.ChatId, campaign.ForumThread.ThreadId, utcGameDateTime,
             user.Id, activeMentions, keyboardGenerator, campaign.Id);
 
         await bot.SetMessageReaction(msg.Chat, msg.Id, ["🔥"]);
@@ -371,8 +414,40 @@ public class CommandHandler(
 
     private async Task HandleSavedCommand(Message msg)
     {
+        var campaign = await campaignManager.ResolveCampaignFromContext(msg.Chat.Id, msg.MessageThreadId);
+        if (campaign is null)
+        {
+            // Not in a campaign thread — show all campaigns picker
+            var user = await EnsureUser(msg);
+            var allCampaigns = await campaignManager.GetActiveCampaigns(msg.Chat.Id);
+            if (allCampaigns.Count == 0)
+            {
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: "⚠️ В этом чате нет активных кампаний.",
+                    parseMode: ParseMode.Html, linkPreviewOptions: true);
+                return;
+            }
+
+            var pickerKeyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
+                CallbackActions.SavedCampaignPick, allCampaigns, user.Id);
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "📜 Выбери кампанию, чтобы узреть её летопись:",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new InlineKeyboardMarkup(pickerKeyboard));
+            return;
+        }
+
+        await SendSavedGamesForCampaign(msg.Chat.Id, msg.MessageThreadId, campaign.Id);
+    }
+
+    /// <summary>
+    /// Sends a list of upcoming saved games for the given campaign.
+    /// Shared between the direct command flow and the SavedCampaignPick callback.
+    /// </summary>
+    internal async Task SendSavedGamesForCampaign(long chatId, int? threadId, int campaignId)
+    {
         var savedGames = await db.SavedGame
-            .Where(sg => sg.DateTime >= DateTime.UtcNow)
+            .Where(sg => sg.DateTime >= DateTime.UtcNow && sg.CampaignId == campaignId)
             .OrderBy(sg => sg.DateTime)
             .ToListAsync();
 
@@ -380,52 +455,101 @@ public class CommandHandler(
         sb.AppendLine();
         sb.AppendLine();
 
-        foreach (var game in savedGames)
+        if (savedGames.Count == 0)
         {
-            var gameDateTime = timeZoneUtilities.ConvertToMoscow(game.DateTime);
-            sb.AppendLine($"- [{game.Id}] {timeZoneUtilities.FormatDateTime(gameDateTime)}");
+            sb.AppendLine("— ни одной битвы не запланировано.");
+        }
+        else
+        {
+            foreach (var game in savedGames)
+            {
+                var gameDateTime = timeZoneUtilities.ConvertToMoscow(game.DateTime);
+                sb.AppendLine($"- {timeZoneUtilities.FormatDateTime(gameDateTime)}");
+            }
         }
 
-        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+        await bot.SendMessage(chatId, messageThreadId: threadId,
             text: sb.ToString(), parseMode: ParseMode.Html,
             linkPreviewOptions: true);
     }
 
     private async Task HandleUnsaveCommand(Message msg, string args)
     {
-        if (!int.TryParse(args, out var id))
-        {
-            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: """
-                      ❌ Номер битвы не найден или написан неправильно.
+        var user = await EnsureUser(msg);
 
-                      Используй заклинание так:
-                      /unsave 0
-                      """
-            );
+        var campaign = await campaignManager.ResolveCampaignFromContext(msg.Chat.Id, msg.MessageThreadId);
+        if (campaign is null)
+        {
+            // Not in a campaign thread — show DM campaigns picker
+            var dmCampaigns = await campaignManager.GetDmCampaigns(user.Id);
+            if (dmCampaigns.Count == 0)
+            {
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: "⚠️ У тебя нет кампаний, которыми ты управляешь.",
+                    parseMode: ParseMode.Html, linkPreviewOptions: true);
+                return;
+            }
+
+            var pickerKeyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
+                CallbackActions.UnsaveCampaignPick, dmCampaigns, user.Id);
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "🗡️ Выбери кампанию, из летописи которой хочешь удалить битву:",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new InlineKeyboardMarkup(pickerKeyboard));
             return;
         }
 
-        var deletedCount = await db.SavedGame.Where(sg => sg.Id == id).ExecuteDeleteAsync();
-
-        if (deletedCount == 0)
+        if (campaign.DungeonMasterId != user.Id)
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: $"🔍 В летописях не найдена битва №{id}"
-            );
+                text: "⚠️ Только Мастер Подземелий может стереть запись о битве!",
+                parseMode: ParseMode.Html, linkPreviewOptions: true);
             return;
         }
 
-        var jobIds = (await db.Set<TimeTickerEntity>()
-                .ToListAsync())
-            .Where(t => TickerHelper.ReadTickerRequest<SendReminderJobContext>(t.Request).SavedGameId == id)
-            .Select(t => t.Id).ToList();
+        await ShowUnsaveKeyboardForCampaign(msg.Chat.Id, msg.MessageThreadId, campaign.Id, user.Id,
+            editMessageId: null);
+    }
 
-        await ticker.DeleteBatchAsync(jobIds);
+    /// <summary>
+    /// Sends or edits a message showing the unsave inline keyboard for a campaign.
+    /// Pass <paramref name="editMessageId"/> to edit an existing message instead of sending a new one.
+    /// </summary>
+    internal async Task ShowUnsaveKeyboardForCampaign(
+        long chatId, int? threadId, int campaignId, long userId, int? editMessageId)
+    {
+        var now = DateTime.UtcNow;
+        var futureGames = await db.SavedGame
+            .Where(sg => sg.DateTime > now && sg.CampaignId == campaignId)
+            .OrderBy(sg => sg.DateTime)
+            .ToListAsync();
 
-        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-            text: "🗡️ Битва вычеркнута из летописи"
-        );
+        if (futureGames.Count == 0)
+        {
+            var noGamesText = "📜 Нет грядущих битв для отмены.";
+            if (editMessageId.HasValue)
+                await bot.EditMessageText(chatId, editMessageId.Value, noGamesText, parseMode: ParseMode.Html);
+            else
+                await bot.SendMessage(chatId, messageThreadId: threadId, text: noGamesText,
+                    parseMode: ParseMode.Html, linkPreviewOptions: true);
+            return;
+        }
+
+        var keyboard = keyboardGenerator.GenerateUnsaveKeyboard(futureGames, userId);
+        if (editMessageId.HasValue)
+        {
+            await bot.EditMessageText(chatId, editMessageId.Value,
+                "🗡️ Выбери битву, которую хочешь вычеркнуть из летописи:",
+                parseMode: ParseMode.Html,
+                replyMarkup: new InlineKeyboardMarkup(keyboard));
+        }
+        else
+        {
+            await bot.SendMessage(chatId, messageThreadId: threadId,
+                text: "🗡️ Выбери битву, которую хочешь вычеркнуть из летописи:",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new InlineKeyboardMarkup(keyboard));
+        }
     }
 
     private async Task HandleWeeklyCommand(Message msg)
@@ -734,6 +858,41 @@ public class CommandHandler(
             text: "🎲 Выбери свободный слот для битвы:",
             parseMode: ParseMode.Html,
             replyMarkup: new InlineKeyboardMarkup(keyboard));
+    }
+
+    /// <summary>
+    /// Finds campaign names (other than <paramref name="campaignId"/>) that have a saved game
+    /// on the same date as <paramref name="utcGameDateTime"/> and share at least one active member.
+    /// Used for collision detection before creating a vote.
+    /// </summary>
+    internal async Task<List<string>> GetConflictingCampaignNames(
+        int campaignId, DateTime utcGameDateTime, List<long> activeMemberIds)
+    {
+        var dateUtc = utcGameDateTime.Date;
+        return await db.SavedGame
+            .Where(sg => sg.CampaignId != campaignId &&
+                         sg.DateTime.Date == dateUtc &&
+                         db.CampaignMembers.Any(cm =>
+                             activeMemberIds.Contains(cm.UserId) && cm.CampaignId == sg.CampaignId))
+            .Select(sg => sg.Campaign.ForumThread.Name)
+            .Distinct()
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Deletes a saved game and cancels all associated TickerQ reminder jobs.
+    /// Used by both the /unsave command and the UnsaveGame callback.
+    /// </summary>
+    internal async Task DeleteSavedGameAndReminders(int savedGameId)
+    {
+        await db.SavedGame.Where(sg => sg.Id == savedGameId).ExecuteDeleteAsync();
+
+        var jobIds = (await db.Set<TimeTickerEntity>().ToListAsync())
+            .Where(t => TickerHelper.ReadTickerRequest<SendReminderJobContext>(t.Request).SavedGameId == savedGameId)
+            .Select(t => t.Id)
+            .ToList();
+
+        await ticker.DeleteBatchAsync(jobIds);
     }
 
     /// <summary>

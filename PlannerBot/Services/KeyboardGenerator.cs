@@ -161,6 +161,32 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     }
 
     /// <summary>
+    /// Generates a campaign picker keyboard for /vote in a service thread.
+    /// Embeds the target slot UTC datetime (compact format) so the callback can fire the vote directly.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateVoteCampaignPickerKeyboard(
+        IReadOnlyList<Campaign> campaigns, DateTime slotUtc, long userId)
+    {
+        var buttons = campaigns
+            .Select(c => new[]
+            {
+                InlineKeyboardButton.WithCallbackData(
+                    $"⚔️ {c.ForumThread.Name}",
+                    $"{CallbackActions.VoteCampaignPick};{c.Id};{slotUtc:yyMMddHHmm};{userId}")
+            })
+            .ToList();
+
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Отмена",
+                $"{CallbackActions.Dismiss};{userId}")
+        ]);
+
+        return buttons.ToArray();
+    }
+
+    /// <summary>
     /// Generates a campaign picker keyboard for the given action and campaigns.
     /// Each button shows the campaign name (from linked ForumThread) and embeds campaign ID + user ID.
     /// Includes a cancel button at the bottom.
@@ -185,6 +211,57 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         ]);
 
         return buttons.ToArray();
+    }
+
+    /// <summary>
+    /// Generates a keyboard listing future saved games for /unsave (DM-only inline picker).
+    /// Each button shows the game date/time and embeds saved game ID and user ID.
+    /// Includes a cancel button at the bottom.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateUnsaveKeyboard(
+        IReadOnlyList<SavedGame> savedGames, long userId)
+    {
+        var buttons = savedGames
+            .Select(sg =>
+            {
+                var moscow = timeZoneUtilities.ConvertToMoscow(sg.DateTime);
+                return new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        $"🗡️ {timeZoneUtilities.FormatDateTime(moscow)}",
+                        $"{CallbackActions.UnsaveGame};{sg.Id};{userId}")
+                };
+            })
+            .ToList();
+
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Отмена",
+                $"{CallbackActions.Dismiss};{userId}")
+        ]);
+
+        return buttons.ToArray();
+    }
+
+    /// <summary>
+    /// Generates a proceed/abort keyboard shown when a scheduling collision is detected.
+    /// Uses compact datetime format (yyMMddHHmm) to stay within 64-byte callback data limit.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateVoteCollisionKeyboard(
+        int campaignId, DateTime slotUtc, long userId)
+    {
+        return
+        [
+            [
+                InlineKeyboardButton.WithCallbackData(
+                    "⚔️ Продолжить",
+                    $"{CallbackActions.VoteConfirm};{campaignId};{slotUtc:yyMMddHHmm};{userId}"),
+                InlineKeyboardButton.WithCallbackData(
+                    "❌ Отменить",
+                    $"{CallbackActions.VoteAbort};{userId}")
+            ]
+        ];
     }
 
     /// <summary>

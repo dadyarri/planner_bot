@@ -1,390 +1,287 @@
-# Roadmap: Multi-Campaign Support
+# Roadmap: PlannerBot
 
 ## Overview
 
-The goal is to support multiple D&D campaigns within a single Telegram supergroup that uses forum threads. Each campaign
-is run by a separate Dungeon Master (DM), lives in its own forum thread, and has its own set of players and game
-schedule. Player availability remains **global** — a player fills in their schedule once and that data is shared across
-all campaigns.
+PlannerBot is a Telegram bot for coordinating D&D game sessions across multiple campaigns within a single
+Telegram supergroup that uses forum threads. Each campaign is run by a separate Dungeon Master (DM), lives in
+its own forum thread, and has its own set of players and game schedule. Player availability remains **global** —
+a player fills in their schedule once and that data is shared across all campaigns.
+
+**Tech stack:** .NET 10, C#, Entity Framework Core (PostgreSQL), Telegram.Bot SDK, TickerQ (scheduled jobs),
+Humanizer (Russian time-span humanization in messages).
 
 ---
 
-## Current State
+## Current State (as of Phase 9)
+
+All foundational multi-campaign support is implemented. Below is a summary of what is live.
 
 ### Entities
 
-- **`User`** — `Id`, `Username`, `Name`, `IsActive`. `IsActive` is a global pause flag toggled by `/pause` and
-  `/unpause`.
+- **`User`** — `Id`, `Username`, `Name`, `IsActive`. `IsActive` is a global pause flag toggled by `/pause`/`/unpause`.
 - **`Response`** — stores a user's availability for a UTC date/time: `Availability` (Yes/No/Probably/Unknown) and
-  `DateTime` (nullable, set when the player picks a start time).
-- **`SavedGame`** — `Id`, `DateTime` (UTC). A confirmed session. No campaign association yet.
-- **`VoteSession`** — `Id`, `ChatId`, `MessageId`, `ThreadId`, `GameDateTime`, `VoteCount`, `AgainstCount`, `Outcome`,
-  `CreatedAt`, `ExpiresAt`, `CreatorUsername`. No campaign association yet.
+  `DateTime` (nullable start time).
+- **`ForumThread`** — `Id`, `ChatId`, `ThreadId`, `Name`, `IsClosed`. Tracked reactively via service messages.
+- **`ServiceThread`** — marks a forum thread as administrative. Toggled by `/service_thread`.
+- **`Campaign`** — `Id`, `DungeonMasterId`, `ForumThreadId`, `IsActive`, `CreatedAt`. Name and chat ID derived from
+  the linked `ForumThread`.
+- **`CampaignMember`** — join table `(CampaignId, UserId, JoinedAt)`.
+- **`SavedGame`** — `Id`, `DateTime` (UTC), `CampaignId`.
+- **`VoteSession`** — `Id`, `ChatId`, `MessageId`, `ThreadId`, `GameDateTime`, `VoteCount`, `AgainstCount`,
+  `Outcome`, `CreatedAt`, `ExpiresAt`, `CreatorUsername`, `CampaignId`.
 - **`VoteSessionVote`** — per-user vote record (For/Against) with unique constraint on `(VoteSessionId, UserId)`.
+- **`AvailableSlot`** — `Id`, `CampaignId`, `DateTime` (UTC), `ComputedAt`. Rebuilt on every `/plan` completion.
 
 ### Commands
 
-| Command                  | Current behaviour                                                                                                                                                         |
-|--------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `/yes hh:mm`             | Mark today as available with a start time. Triggers auto-voting if everyone is available in current day                                                                   |
-| `/no`                    | Mark today as unavailable. Cancels any reminder jobs for today's saved games.                                                                                             |
-| `/prob`                  | Mark today as "probably available".                                                                                                                                       |
-| `/get`                   | Shows a 12-day availability grid for all active users.                                                                                                                    |
-| `/pause` / `/unpause`    | Toggle `User.IsActive`.                                                                                                                                                   |
-| `/plan`                  | Sends an inline calendar for the next 8 days. The "Done" button fills unmarked days as unavailable and auto-creates voting sessions for any day where all users are free. |
-| `/vote dd.MM.yyyy HH:mm` | Anyone can start a vote. No campaign or DM restriction.                                                                                                                   |
-| `/saved`                 | Lists all future `SavedGame` rows with their internal integer IDs.                                                                                                        |
-| `/unsave <id>`           | Deletes a `SavedGame` by integer ID. Cancels associated reminder jobs.                                                                                                    |
-| `/weekly`                | Schedules a weekly Saturday reminder (cron job via TickerQ).                                                                                                              |
-
-### Voting
-
-Voting is **reaction-based** — the bot posts a message and reacts 👍 to it. Players react 👍 (for) or 👎 (against). The bot
-monitors `MessageReaction` updates. A session is saved when `VoteCount >= activeUsersCount`; no-consensus when
-`AgainstCount >= ceil(activeUsersCount / 2)`. Sessions expire after 24 hours; a reminder is sent after 12 hours.
-
-### Callback data format
-
-All callback data uses semicolon-separated strings: `"action;param1;param2;..."`. Routing is handled in
-`UpdateHandler.OnCallbackQuery` via a `switch` on `split[0]`.
+| Command                   | Who    | Description                                                                                                                       |
+|---------------------------|--------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `/start`                  | Anyone | Show command reference.                                                                                                           |
+| `/yes hh:mm`              | Anyone | Mark today as available with a start time.                                                                                        |
+| `/no`                     | Anyone | Mark today as unavailable. Cancels today's saved games and reminders.                                                             |
+| `/prob`                   | Anyone | Mark today as "probably available".                                                                                               |
+| `/get`                    | Anyone | Show 12-day availability grid for all active users.                                                                               |
+| `/plan`                   | Anyone | Inline calendar for the next 8 days. On "Done": computes per-campaign slots, caches to `AvailableSlot`, posts summary.            |
+| `/pause` / `/unpause`     | Anyone | Toggle `User.IsActive` globally.                                                                                                  |
+| `/weekly`                 | Anyone | Schedule a weekly Saturday 21:00 UTC `/plan` reminder (cron job).                                                                |
+| `/vote dd.MM.yyyy HH:mm`  | DM     | Manually start a voting session for the current campaign. DM-only.                                                                |
+| `/steal`                  | DM     | Pick a cached available slot and instantly start a vote for the current campaign.                                                 |
+| `/saved`                  | Anyone | List upcoming saved games for the current campaign.                                                                               |
+| `/unsave`                 | DM     | Inline keyboard to delete a saved game and cancel its reminders. DM-only.                                                        |
+| `/campaign_new`           | Anyone | Create a campaign in the current thread (sender becomes DM).                                                                      |
+| `/campaign_join`          | Anyone | Join the campaign of the current thread.                                                                                          |
+| `/campaign_leave`         | Member | Leave the campaign of the current thread.                                                                                         |
+| `/campaign_pause`         | DM     | Pause (soft-delete) a campaign (`IsActive = false`), transferring the turn to the next. DM-only.             |
+| `/service_thread`         | Anyone | Toggle the current thread's service-thread status.                                                                                |
 
 ### Background jobs
 
-The bot uses **TickerQ** for scheduled tasks:
-
 - `expire_vote_session` — marks a vote session as Expired after 24 h.
 - `send_vote_reminder` — pings non-voters after 12 h.
-- `send_game_reminder` — notifies players before a saved game.
-- `send_weekly_voting_reminder` — Saturday cron job.
+- `send_game_reminder` — notifies campaign members before a saved game (48 h, 24 h, 5 h, 3 h, 1 h, 10 min).
+  Posted in the campaign's forum thread, mentioning the DM and all members.
+- `send_weekly_voting_reminder` — Saturday cron job (global).
 
 ---
 
-## Phase 1: Refactoring
+## Phase 10: Campaign Order (Round-Robin Turn Queue)
 
-Clean up the existing codebase before adding multi-campaign logic. This phase has no user-visible changes.
+### Problem
 
-### 1.1 Extract `SlotCalculator`
+When multiple DMs want to schedule sessions there is no coordination about whose turn it is. One DM can
+monopolise slots while others wait. This phase introduces a lightweight, implicit turn-queue so campaigns rotate
+fairly.
 
-Move the "are all users free on this date?" logic out of `AvailabilityManager.CheckIfDateIsAvailable` into a dedicated
-`SlotCalculator` service.
+### Design Principles
 
-`SlotCalculator` will expose:
-
-- `GetAvailableSlotsForCampaign(Campaign campaign, IEnumerable<Response> allResponses) → IEnumerable<DateTime>` — finds
-  all UTC datetimes where **every active member** of the campaign has responded `Yes` with a non-zero start time, with
-  no saved game already on that date **for this campaign**.
--
-
-`GetAvailableSlotsForAllCampaigns(IEnumerable<Campaign> campaigns, IEnumerable<Response> allResponses) → Dictionary<Campaign, IEnumerable<DateTime>>` —
-convenience wrapper.
-
-### 1.2 Standardise callback routing
-
-The current `OnCallbackQuery` switch statement will grow significantly. Before adding more cases, standardise the
-pattern:
-
-- Define constants or an enum for callback prefixes (e.g. `"plan"`, `"pstatus"`, `"ptime"`, `"pback"`, `"delete"`,
-  `"vote_cancel"`).
-- Add a `ResolveCampaignFromContext(long chatId, int? threadId) → Campaign?` helper that looks up the campaign
-  associated with a given thread. Returns `null` for service threads or untracked threads.
-- Add a `ShowCampaignPicker(long chatId, int? threadId, long userId, string action) → Task` helper that posts an inline
-  keyboard listing campaigns relevant to the user (member or DM), for use in service-thread flows.
-
-### 1.3 Per-campaign context resolution
-
-Centralise the pattern: *"which campaign does this command apply to?"*:
-
-1. If the message is in a campaign thread → that campaign.
-2. If the message is in a service thread → show a campaign picker inline keyboard.
-3. If the thread is unknown → treat as service thread.
-
-This logic will be called by every campaign-scoped command (`/vote`, `/saved`, `/unsave`, `/steal`, `/campaign_join`,
-etc.).
-
-### 1.4 Remove auto-voting from `/yes` and simplify `UpdateResponseForDate`
-
-The `/yes` command currently auto-creates a voting session when all users are available for today. Remove this
-behaviour — voting must always be initiated explicitly by a DM.
-
-`AvailabilityManager.UpdateResponseForDate` currently calls `CheckIfDateIsAvailable` internally and returns
-`Task<DateTime?>` so callers can trigger voting. Once auto-voting from `/yes` is removed, no caller uses that return
-value (the `ptime` and `pstatus` callbacks already ignore it). Simplify the method to return `Task` and remove the
-internal `CheckIfDateIsAvailable` call — slot-checking belongs in `SlotCalculator` (step 1.1).
-
-### 1.5 Rename `"delete"` callback to `"plan_done"`
-
-The "Done" button in `/plan` currently uses `"delete"` as its callback data — a confusing name that suggests deletion
-rather than finishing the planning flow. Rename it to `"plan_done"` in both `KeyboardGenerator.GeneratePlanKeyboard` (
-button creation) and `UpdateHandler.OnCallbackQuery` (case handler).
-
-### 1.6 Remove duplicate `CultureInfo` from `Jobs`
-
-`Jobs` declares its own static `CultureInfo RussianCultureInfo = new("ru-RU")`, duplicating the same field in
-`TimeZoneUtilities`. Inject `TimeZoneUtilities` into `Jobs` and use `timeZoneUtilities.GetRussianCultureInfo()` instead.
+- **Explicit circular order.** Each campaign has a fixed `OrderIndex` (integer position). The order pointer does
+  **not** advance automatically. A DM must explicitly pass the turn by pausing their campaign (`/campaign_pause`). Order is configured via `/order_set`.
+- **Soft enforcement.** DMs are warned, not hard-blocked, when acting out of turn. This avoids frustrating
+  deadlocks when the leading DM has no available slots.
+- **Turn transfer on pause.** When a DM pauses their campaign (`/campaign_pause`), the order pointer advances
+  to the next campaign in the ring.
 
 ---
 
-## Phase 2: Forum Thread Tracking (`ForumThread`)
+### 10.1 Data Model Changes
 
-The Telegram Bot API does not provide a way to list forum threads. The bot must track them reactively by listening to
-service messages.
+Add one column to `Campaign` and one new table:
 
-**Service messages to handle in `UpdateHandler.OnMessage`:**
+**`Campaign` — new column:**
 
-| `Message.Type`       | Action                                                                                           |
-|----------------------|--------------------------------------------------------------------------------------------------|
-| `ForumTopicCreated`  | Insert `ForumThread` with `ThreadId = msg.MessageThreadId`, `Name = msg.ForumTopicCreated.Name`. |
-| `ForumTopicEdited`   | Update `ForumThread.Name`.                                                                       |
-| `ForumTopicClosed`   | Set `ForumThread.IsClosed = true`.                                                               |
-| `ForumTopicReopened` | Set `ForumThread.IsClosed = false`.                                                              |
+| Column       | Type   | Default | Notes                                                    |
+|--------------|--------|---------|----------------------------------------------------------|
+| `OrderIndex` | `int?` | `null`  | Position in the rotation ring. `null` = not participating in the order. Lower = earlier in ring. |
 
-These are **upsert** operations keyed on `(ChatId, ThreadId)`.
+**New entity: `CampaignOrderState`** — a single-row table (per chat) holding the global pointer:
 
-### New entity: `ForumThread`
+| Column          | Type   | Notes                                                                   |
+|-----------------|--------|-------------------------------------------------------------------------|
+| `Id`            | int PK |                                                                         |
+| `ChatId`        | long   | Telegram chat ID. Unique.                                               |
+| `CurrentIndex`  | int    | The `OrderIndex` of the campaign whose turn it currently is. Starts at 0. |
 
-| Column     | Type        | Notes                        |
-|------------|-------------|------------------------------|
-| `Id`       | int, PK     | Auto-increment               |
-| `ChatId`   | long        | Telegram chat ID             |
-| `ThreadId` | int         | Telegram `message_thread_id` |
-| `Name`     | string(128) | Current thread name          |
-| `IsClosed` | bool        | Whether the thread is closed |
+**EF migration name:** `AddCampaignOrderFields`
 
-Unique constraint on `(ChatId, ThreadId)`.
-
-**New service:** `ForumThreadTracker` — called from `OnMessage` for the four topic service message types. Keeps
-`ForumThread` in sync with Telegram state.
+```bash
+cd PlannerBot
+DATABASE_URL="Host=localhost;Database=planner_bot;Username=postgres;Password=postgres" \
+  dotnet ef migrations add AddCampaignOrderFields
+```
 
 ---
 
-## Phase 3: Campaigns and Members
+### 10.2 New Service: `CampaignOrderService`
 
-### New entity: `Campaign`
+New file: `Services/CampaignOrderService.cs`
 
-| Column            | Type                       | Notes                 |
-|-------------------|----------------------------|-----------------------|
-| `Id`              | int, PK                    |                       |
-| `DungeonMasterId` | long, FK → `User.Id`       | The DM who created it |
-| `ForumThreadId`   | int, FK → `ForumThread.Id` | One-to-one            |
-| `IsActive`        | bool                       | Soft-delete flag      |
-| `CreatedAt`       | DateTime                   | UTC                   |
+Injected dependencies: `AppDbContext`, `ITelegramBotClient`.
 
-The campaign's name and chat ID are always derived from the linked `ForumThread` — no duplication. One `ForumThread` →
-at most one active `Campaign`.
+#### `GetOrderedCampaigns(long chatId) → Task<List<Campaign>>`
 
-### New entity: `CampaignMember`
+Returns all active campaigns in the chat that have a non-null `OrderIndex`, ordered by `OrderIndex ASC`.
+Eagerly loads `ForumThread` and `DungeonMaster`.
 
-| Column       | Type                    | Notes |
-|--------------|-------------------------|-------|
-| `CampaignId` | int, FK → `Campaign.Id` |       |
-| `UserId`     | long, FK → `User.Id`    |       |
-| `JoinedAt`   | DateTime                | UTC   |
+#### `GetCurrentCampaign(long chatId) → Task<Campaign?>`
 
-Unique constraint on `(CampaignId, UserId)`.
+1. Load `CampaignOrderState` for the chat. If none exists, return `null`.
+2. Find the active campaign whose `OrderIndex == state.CurrentIndex`. If not found (e.g. campaign was deleted),
+   advance the pointer once and retry (up to N attempts to avoid infinite loop).
 
-`User.IsActive` (the global pause) is orthogonal to campaign membership — a paused user is excluded from availability
-checks across all campaigns. `CampaignMember` only records which campaigns a user belongs to.
+#### `AdvanceTurn(long chatId) → Task`
 
-### New entity: `ServiceThread`
+1. Loads the ordered campaigns list and `CampaignOrderState`.
+2. Increments `CurrentIndex` to the `OrderIndex` of the next campaign in the ring (wraps around).
+3. New campaign's `IsActive` becomes `true`
+4. Saves changes.
+5. Posts a Russian fantasy announcement to the next campaign's forum thread in the same chat (see §10.6 for message format).
 
-| Column          | Type                       | Notes  |
-|-----------------|----------------------------|--------|
-| `Id`            | int, PK                    |        |
-| `ForumThreadId` | int, FK → `ForumThread.Id` | Unique |
+#### `SetOrder(long chatId, IReadOnlyList<int> campaignIds) → Task`
 
-A `ServiceThread` row marks a forum thread as administrative (not a campaign thread). The `/service_thread` command
-toggles this: if no row exists → inserts one; if a row exists → deletes it.
-
-### New commands (Phase 3)
-
-| Command            | Behaviour                                                                                                                                                                                             |
-|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `/campaign_new`    | Creates a `Campaign` in the current thread. Sender becomes DM. Fails if: thread is a `ServiceThread`, thread already has an active campaign, or sender already has an active campaign in this thread. |
-| `/campaign_join`   | Adds the sender to the current thread's campaign as a `CampaignMember`. In a service thread: shows an inline keyboard listing active campaigns.                                                       |
-| `/campaign_leave`  | Removes the sender from the current thread's campaign. Inline keyboard in service threads.                                                                                                            |
-| `/campaign_delete` | Sets `Campaign.IsActive = false` (soft-delete). DM-only. In a service thread: inline keyboard filtered to campaigns where sender is DM.                                                               |
-| `/service_thread`  | Toggles `ServiceThread` for the current thread.                                                                                                                                                       |
+Sets `OrderIndex` on each campaign according to the provided list position. Campaigns not in the list get
+`OrderIndex = null`. Resets `CampaignOrderState.CurrentIndex` to the first position. Saves changes.
 
 ---
 
-## Phase 4: Database Migration
+### 10.3 Turn Transfer Triggers
 
-Add `CampaignId` foreign keys to `SavedGame` and `VoteSession`.
+The pointer advances in exactly two situations:
 
-### Changes to existing entities
+1. **`/campaign_pause`** — the DM pauses their campaign. After `Campaign.IsActive` is set to `false`,
+   `CampaignOrderService.AdvanceTurn(chatId)` is called.
 
-**`SavedGame`** — add `CampaignId int NOT NULL FK → Campaign.Id`.  
-**`VoteSession`** — add `CampaignId int NOT NULL FK → Campaign.Id`.
-
-### Migration strategy
-
-- Both FK columns are **NOT NULL**.
-- Existing data in `SavedGame` and `VoteSession` will be **deleted** in the migration — DMs will set up campaigns from
-  scratch.
-- If deletion is not feasible (e.g. data must be preserved), create a temporary "Legacy" campaign and assign all
-  existing rows to it.
-- Breaking changes are acceptable; backward compatibility is not required.
+**Saving a game does NOT advance the pointer.** The DM retains their turn until they explicitly give it up.
 
 ---
 
-## Phase 5: Changes to `/plan`
+### 10.4 Soft Enforcement in `/steal` and `/vote`
 
-### What stays the same
+In `CommandHandler.HandleStealCommand` and `CommandHandler.HandleVoteCommand`, after the campaign is resolved
+and the DM check passes:
 
-The player-facing interaction is unchanged: `/plan` shows the inline calendar, the player picks days and availability (
-Yes/No/Probably), and for "Yes" days picks a start time. The "Done" button (`"plan_done"` callback, renamed in Phase 1)
-still calls `SetUnavailableForUnmarkedDays`.
+1. Call `campaignOrderService.GetCurrentCampaign(chatId)`.
+2. If `currentCampaign == null` or `currentCampaign.Id == resolvedCampaign.Id` → it is their turn; proceed normally.
+3. If the resolved campaign has `OrderIndex == null` → not in the rotation; proceed normally (no enforcement).
+4. Otherwise → send an inline keyboard with two buttons:
+   - ✅ **Продолжить** — callback `oo;{campaignId};{flowType};{paramUnixTime};{username}`
+   - ❌ **Отмена** — callback `oc;{username}`
 
-### What changes
+   With a Russian D&D-flavored warning message explaining whose turn it actually is.
 
-After `SetUnavailableForUnmarkedDays` completes, instead of auto-creating voting sessions:
-
-1. **No automatic vote creation** — remove the loop in the `"delete"` callback handler that called
-   `votingManager.SendVotingMessage`.
-2. **Compute per-campaign free slots** — call `SlotCalculator.GetAvailableSlotsForAllCampaigns` using the fresh
-   `Response` data for the coming 8 days.
-3. **Cache results** — write computed slots to `AvailableSlot`, replacing any existing rows for the same campaign (full
-   replacement, not append).
-4. **Send summary** — post a message in the same thread listing free slots grouped by campaign, e.g.:
-   > **Throne of Darkness:** Saturday 18:00, Sunday 15:00  
-   > **Lost Mines:** Saturday 18:00
-
-### New entity: `AvailableSlot`
-
-| Column       | Type                    | Notes                       |
-|--------------|-------------------------|-----------------------------|
-| `Id`         | int, PK                 |                             |
-| `CampaignId` | int, FK → `Campaign.Id` |                             |
-| `DateTime`   | DateTime                | UTC slot                    |
-| `ComputedAt` | DateTime                | UTC, set on every recompute |
-
-The cache is rebuilt whenever **any** player completes `/plan`. Old rows for the same campaign are deleted before
-inserting new ones.
+`flowType` is `steal` or `vote`. `paramUnixTime` encodes the selected slot or requested date/time as Unix timestamp.
 
 ---
 
-## Phase 6: `/steal` — Quick Vote Creation for DMs
+### 10.5 New Commands
 
-`/steal` gives a DM a one-click way to schedule a game from the cached `AvailableSlot` table.
+#### `/order`
 
-**Flow — in a campaign thread:**
+- Available in any thread (campaign or service).
+- Calls `GetOrderedCampaigns(chatId)`.
+- Posts a numbered queue list showing position, campaign name, DM name, and whose turn it currently is (example):
 
-1. Bot queries `AvailableSlot` for that campaign, filtering out slots in past.
-2. If no slots cached → reply "No available slots found. Ask players to fill in `/plan` first."
-3. Else → show an inline keyboard with one button per slot (formatted in Moscow time).
-4. DM taps a slot → bot calls `votingManager.SendVotingMessage` for that campaign's thread, scoped to that campaign's
-   active members.
+  > 📜 **Очерёдность походов:**
+  > 🎯 1. **Трон Тьмы** (Мастер: Ярослав)
+  > 2. **Потерянные Копи** (Мастер: Андрей)
+  > 3. **Море Клинков** (Мастер: Саша)
 
-**Flow — in a service thread:**
+  The current campaign is prefixed with 🎯. If no rotation is set up, replies with a prompt to use `/order_set`.
 
-1. Show a campaign picker filtered to campaigns where the user is DM.
-2. After campaign selection → show slot picker for that campaign, filtering out slots in past.
-3. After slot selection → send vote in the campaign's thread (`ForumThread.ThreadId`).
+#### `/order_set`
 
-**Restrictions:**
-
-- Only the DM of a campaign can use `/steal` for that campaign.
-
----
-
-## Phase 7: Restrict `/vote`, `/saved`, `/unsave` to Campaigns
-
-### `/vote`
-
-- **DM-only**: only the DM of the campaign associated with the current thread may run `/vote`.
-- In a service thread: campaign picker, then date/time input (or drop date/time input entirely and redirect to
-  `/steal`).
-- The created `VoteSession` gets `CampaignId` set.
-- The voting message mentions only active members of that campaign (not all active users globally).
-- Voting outcome thresholds use `CampaignMember` count, not global `User.IsActive` count.
-
-### `/saved`
-
-- Shows only games for the campaign of the current thread.
-- **No internal IDs** in the output — use a formatted date/time list only.
-
-### `/unsave`
-
-- **DM-only**.
-- Instead of `/unsave <id>`, shows an inline keyboard listing future saved games for the current campaign. DM taps one
-  to remove it.
-- Cancels associated reminder TickerQ jobs.
+- Admin/DM-only (any DM of a campaign in the chat).
+- Shows an **inline keyboard** listing all registered campaigns in the chat as buttons.
+- **Interaction model:**
+  - Each campaign button shows the campaign name and its current assigned position number (empty if unassigned).
+  - Tapping a campaign button assigns it the next available position number (1, 2, 3 … N), cycling: if already
+    at the last position, it wraps back to unassigned on the next tap.
+  - State is held in the callback data — no server-side draft is stored; the full ordering is encoded in the
+    callback on each interaction.
+  - Four control buttons at the bottom:
+    - **🔄 Сброс** — resets all assignments to the current saved state (before this keyboard was opened).
+    - **❌ Отмена** — removes the keyboard without saving any changes.
+    - **💾 Сохранить** — calls `CampaignOrderService.SetOrder(chatId, campaignIds)` with the final ordered list,
+      resets the pointer to position 1, then edits the message to show the new `/order` list.
+- Callback data format for campaign buttons:
+  `ost;{campaignId};{serialisedState};{username}`
+  where `serialisedState` is a comma-separated list of `campaignId:position` pairs for all currently-assigned
+  campaigns (unassigned campaigns are omitted).
+- Callback data format for control buttons:
+  `osr;{savedState};{username}` / `osc;{username}` / `oss;{serialisedState};{username}`
 
 ---
 
-## Phase 8: Collision Detection
+### 10.6 Message Formats (Russian, D&D Flavor)
 
-Before creating a vote (via `/vote` or `/steal`), check `SavedGame` for conflicts:
+**Turn advance notification (posted to next campaign's thread):**
+> 🎲 Теперь ваш ход, Мастер **{DM mention}**! Очередь кампании **{Campaign name}** пришла —
+> самое время объявить дату следующей битвы.
 
-- Query: does any active member of the target campaign have a `SavedGame` in **any other campaign** on the same date?
-- If yes → send a warning message listing the conflicting campaigns and players. The DM can proceed or abort using
-  inline keyboard.
-- This is an informational warning, not a hard block.
+**Turn advance notification (posted to service threads):**
+> ⚔️ Кампания **{previous campaign name}** передала ход. Следующий в очереди —
+> **{next campaign name}** (Мастер: {next DM mention}).
 
----
+**Out-of-turn warning:**
+> ⚠️ Сейчас не ваш черёд, Мастер! Первой в очереди стоит кампания **{current campaign name}**
+> (Мастер: {DM name}). Вы всё равно хотите продолжить?
 
-## Phase 9: Route Reminders to Campaign Threads
-
-### Game reminders
-
-When `SavedGame` is created, schedule `send_game_reminder` jobs targeting `ForumThread.ThreadId` of the campaign.
-Message format:
-
-> 🎲 Game in **<Campaign Name>** in <time until game>.  
-> DM: @DungeonMasterUsername  
-> Players: @Player1 @Player2 ...
-
-### Weekly planning reminder
-
-`/weekly` remains global — not tied to any campaign. The cron job sends a reminder to prompt all users to fill in
-`/plan`.
+**Explicit yield (`/order_next`) confirmation:**
+> 🔄 Ход передан. Следующий в очереди — **{next campaign name}** (Мастер: {DM mention}).
 
 ---
 
-## Command Summary
+### 10.7 Callback Routing Changes
 
-### New commands
+In `UpdateHandler.OnCallbackQuery` (switch on `split[0]`), add:
 
-| Command            | Who    | Description                                                                              |
-|--------------------|--------|------------------------------------------------------------------------------------------|
-| `/campaign_new`    | Anyone | Create a campaign in the current thread (sender = DM). Rejected in service threads.      |
-| `/campaign_join`   | Anyone | Join the campaign of the current thread. Inline picker in service threads.               |
-| `/campaign_leave`  | Member | Leave the campaign of the current thread. Inline picker in service threads.              |
-| `/campaign_delete` | DM     | Soft-delete a campaign. Inline picker in service threads (campaigns where sender is DM). |
-| `/service_thread`  | Anyone | Toggle the current thread's service-thread status.                                       |
-| `/steal`           | DM     | Pick a cached available slot and instantly start a vote.                                 |
+| Action | Handler                                                                                                                              |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------|
+| `oo`  | Verify username. Parse `flowType` and `paramUnixTime`, re-invoke steal or vote flow without the turn check.                          |
+| `oc`  | Verify username. Edit the message to "Отменено.".                                                                                    |
+| `ons` | Verify username. Resolve campaign, call `CampaignOrderService.AdvanceTurn(chatId)`. Send turn-transfer announcement.                 |
+| `ost` | Verify username. Parse `serialisedState`, toggle position for the tapped campaign, rebuild and edit the keyboard in place.           |
+| `osr` | Verify username. Parse `savedState`, restore it, rebuild and edit the keyboard in place.                                             |
+| `osc` | Verify username. Delete (or clear reply markup of) the keyboard message.                                                             |
+| `oss` | Verify username. Parse `serialisedState`, call `CampaignOrderService.SetOrder(chatId, ...)`, edit message to show new `/order` list. |
 
-### Global commands (no campaign scope)
+Add constants to `CallbackActions.cs`:
 
-| Command                        | Notes                                                                                         |
-|--------------------------------|-----------------------------------------------------------------------------------------------|
-| `/plan`                        | Unchanged interaction. After "Done": computes per-campaign slots, caches them, shows summary. |
-| `/yes`, `/no`, `/prob`, `/get` | Unchanged.                                                                                    |
-| `/pause`, `/unpause`           | Unchanged. Affects all campaigns.                                                             |
-| `/weekly`                      | Unchanged.                                                                                    |
-
-### Campaign-scoped commands (changed)
-
-| Command   | Change                                                               |
-|-----------|----------------------------------------------------------------------|
-| `/vote`   | DM-only. Scoped to current campaign. Mentions campaign members only. |
-| `/saved`  | Scoped to current campaign. No internal IDs in output.               |
-| `/unsave` | DM-only. Inline keyboard instead of ID argument.                     |
+```csharp
+public const string OrderOverride    = "oo";
+public const string OrderCancel      = "oc";
+public const string OrderNextSelect  = "ons";
+public const string OrderSetToggle   = "ost";
+public const string OrderSetReset    = "osr";
+public const string OrderSetCancel   = "osc";
+public const string OrderSetSave     = "oss";
+```
 
 ---
 
-## Implementation Order
+### 10.8 Edge Cases
 
-1. **Phase 1** — Refactoring: remove auto-voting from `/yes` and simplify `UpdateResponseForDate`, extract
-   `SlotCalculator`, standardise callback routing, add `ResolveCampaignFromContext` helper, rename `"delete"` callback
-   to `"plan_done"`, remove duplicate `CultureInfo` from `Jobs`.
-2. **Phase 2** — Forum thread tracking: `ForumThread` entity + service message handling in `UpdateHandler`.
-3. **Phase 3** — Campaigns: `Campaign`, `CampaignMember`, `ServiceThread` entities + `/campaign_new`, `/campaign_join`,
-   `/campaign_leave`, `/campaign_delete`, `/service_thread` commands.
-4. **Phase 4** — DB migration: add `CampaignId` to `SavedGame` and `VoteSession`, delete stale data.
-5. **Phase 5** — Update `/plan` "Done" handler: remove auto-voting, add slot computation, cache to `AvailableSlot`, send
-   summary.
-6. **Phase 6** — `/steal` command.
-7. **Phase 7** — Restrict `/vote`, `/saved`, `/unsave` to campaigns with updated scoping and DM checks.
-8. **Phase 8** — Collision detection before vote creation.
-9. **Phase 9** — Route game reminder jobs to campaign threads with DM and player mentions.
+| Scenario | Handling |
+|---|---|
+| Campaign paused mid-queue (`/campaign_pause`) | `IsActive = false` → excluded from `GetOrderedCampaigns`. `OrderIndex` set to `null`. `AdvanceTurn` called automatically. |
+| Campaign has `OrderIndex = null` | Not in the rotation; no enforcement applied when its DM uses `/steal` or `/vote`. |
+| Only one campaign in rotation | Turn check always passes; `/order_next` advances pointer to itself (no visible effect). |
+| No rotation set up yet | `CampaignOrderState` does not exist → `GetCurrentCampaign` returns `null` → enforcement skipped everywhere. |
+| All campaigns in rotation are paused/deleted | Pointer can't resolve → log warning, treat as no current campaign. |
+
+---
+
+### 10.9 Implementation Order
+
+1. Add `OrderIndex` column to `Campaign` entity (`Data/Campaign.cs`).
+2. Add `CampaignOrderState` entity (`Data/CampaignOrderState.cs`) and register in `AppDbContext`.
+3. Generate EF migration `AddCampaignOrderFields`.
+4. Implement `CampaignOrderService` (`Services/CampaignOrderService.cs`) with all five methods.
+5. Register `CampaignOrderService` in DI (`Program.cs`).
+6. Call `AdvanceTurn` in `CampaignManager.DeleteCampaign` (the method backing `/campaign_pause`) after deactivating the campaign.
+7. Add soft enforcement to `HandleStealCommand` and `HandleVoteCommand` in `CommandHandler.cs`.
+8. Add callback handlers for `oo`, `oc`, `ons`, `ost`, `osr`, `osc`, `oss` in `UpdateHandler.OnCallbackQuery`.
+9. Add constants to `CallbackActions.cs`.
+10. Implement `/order` command in `CommandHandler.cs`.
+11. Implement `/order_set` command in `CommandHandler.cs` (sends the inline keyboard).
+13. Add `/order`, `/order_set` to the `/start` help text.
+14. Run `dotnet format`.

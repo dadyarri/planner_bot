@@ -46,22 +46,17 @@ public class GameScheduler
 
     /// <summary>
     /// Saves a game and schedules reminders at specified intervals before the game.
+    /// Returns the message text to display to the user (success or error).
+    /// Does not send any Telegram messages — caller is responsible for display.
     /// </summary>
-    public async Task SavePlannedGame(DateTime dateTime, Message message)
+    public async Task<string> SavePlannedGame(DateTime dateTime, Message message, int campaignId)
     {
         var now = DateTime.UtcNow;
         var dateTimeUtc = _timeZoneUtilities.ConvertToUtc(dateTime);
 
         // Check if game is in the past
         if (dateTimeUtc < now)
-        {
-            await _bot.SendMessage(message.Chat.Id,
-                messageThreadId: message.MessageThreadId,
-                text: "⚠️ Нельзя назначить битву в прошлое!",
-                parseMode: ParseMode.Html, linkPreviewOptions: true,
-                replyMarkup: new ReplyKeyboardRemove());
-            return;
-        }
+            return "⚠️ Нельзя назначить битву в прошлое!";
 
         await _db.SavedGame.Where(sg => sg.DateTime <= now.Date).ExecuteDeleteAsync();
 
@@ -71,67 +66,48 @@ public class GameScheduler
         var existingGameOnDate = allGames.Any(sg =>
             _timeZoneUtilities.ConvertToMoscow(sg.DateTime).Date == moscowGameDate);
 
-        if (!existingGameOnDate)
+        if (existingGameOnDate)
+            return "⚔️ На этот день битва уже назначена!";
+
+        var savedGame = new SavedGame
         {
-            var savedGame = new SavedGame
-            {
-                DateTime = dateTimeUtc
-            };
-            await _db.AddAsync(savedGame);
-            await _db.SaveChangesAsync();
+            DateTime = dateTimeUtc,
+            CampaignId = campaignId
+        };
+        await _db.AddAsync(savedGame);
+        await _db.SaveChangesAsync();
 
-            var timeUntilGame = dateTimeUtc - DateTime.UtcNow;
+        var timeUntilGame = dateTimeUtc - DateTime.UtcNow;
 
-            foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
-            {
-                var executionTime = dateTimeUtc.Add(-timeSpan);
-                var reminderIntervalMinutes = (int)timeSpan.TotalMinutes;
-
-                var schedulingResult = await _ticker.AddAsync(new TimeTickerEntity
-                {
-                    Function = "send_reminder",
-                    ExecutionTime = executionTime,
-                    Request = TickerHelper.CreateTickerRequest(new SendReminderJobContext
-                    {
-                        ReminderIntervalMinutes = reminderIntervalMinutes,
-                        ChatId = message.Chat.Id,
-                        ThreadId = message.MessageThreadId,
-                        SavedGameId = savedGame.Id
-                    }),
-                });
-
-                if (schedulingResult.IsSucceeded)
-                {
-                    _logger.LogInformation("Reminder scheduled to {ExecutionTime}", executionTime);
-                }
-            }
-
-            var sb = new StringBuilder();
-
-            foreach (var game in _db.SavedGame)
-            {
-                var gameDateTime = _timeZoneUtilities.ConvertToMoscow(game.DateTime);
-                var dateStr = _timeZoneUtilities.FormatDateTime(gameDateTime);
-                sb.AppendLine($"- {dateStr}");
-            }
-
-            await _bot.SendMessage(message.Chat.Id,
-                messageThreadId: message.MessageThreadId,
-                text: $"""
-                       🏰 Битва записана в летописи! Грядущие битвы:
-
-                       {sb}
-                       """,
-                parseMode: ParseMode.Html, linkPreviewOptions: true,
-                replyMarkup: new ReplyKeyboardRemove());
-        }
-        else
+        foreach (var timeSpan in ReminderIntervals.Where(i => i <= timeUntilGame))
         {
-            await _bot.SendMessage(message.Chat.Id,
-                messageThreadId: message.MessageThreadId,
-                text: "⚔️ На этот день битва уже назначена!",
-                parseMode: ParseMode.Html, linkPreviewOptions: true,
-                replyMarkup: new ReplyKeyboardRemove());
+            var executionTime = dateTimeUtc.Add(-timeSpan);
+            var reminderIntervalMinutes = (int)timeSpan.TotalMinutes;
+
+            var schedulingResult = await _ticker.AddAsync(new TimeTickerEntity
+            {
+                Function = "send_reminder",
+                ExecutionTime = executionTime,
+                Request = TickerHelper.CreateTickerRequest(new SendReminderJobContext
+                {
+                    ReminderIntervalMinutes = reminderIntervalMinutes,
+                    ChatId = message.Chat.Id,
+                    ThreadId = message.MessageThreadId,
+                    SavedGameId = savedGame.Id
+                }),
+            });
+
+            if (schedulingResult.IsSucceeded)
+                _logger.LogInformation("Reminder scheduled to {ExecutionTime}", executionTime);
         }
+
+        var sb = new StringBuilder();
+        foreach (var game in _db.SavedGame)
+        {
+            var gameDateTime = _timeZoneUtilities.ConvertToMoscow(game.DateTime);
+            sb.AppendLine($"- {_timeZoneUtilities.FormatDateTime(gameDateTime)}");
+        }
+
+        return $"✅ Совет единогласен — битва записана в летописи! ⚔️\n\n🏰 Грядущие битвы:\n{sb}";
     }
 }

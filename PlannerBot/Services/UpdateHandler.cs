@@ -45,7 +45,7 @@ public partial class UpdateHandler(
     public async Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source,
         CancellationToken cancellationToken)
     {
-        LogHandleerrorException(logger);
+        LogHandleerrorException(logger, exception);
         // Cooldown in case of network connection error
         if (exception is RequestException)
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
@@ -488,32 +488,25 @@ public partial class UpdateHandler(
 
         var outcome = VoteOutcome.Pending;
 
-        // Process thumbs-up vote
-        if (thumbsUpChanged)
+        // Process all removals first so duplicate-vote checks don't block additions
+        // when a user switches reaction in a single update (e.g. 👎 → 👍).
+        if (thumbsUpChanged && !hasThumbsUpInNew && hasThumbsUpInOld)
+            await votingManager.RemoveVote(votingSession.Id, user.Id, VoteType.For);
+
+        if (thumbsDownChanged && !hasThumbsDownInNew && hasThumbsDownInOld)
+            await votingManager.RemoveVote(votingSession.Id, user.Id, VoteType.Against);
+
+        // Then process additions
+        if (thumbsUpChanged && hasThumbsUpInNew && !hasThumbsUpInOld)
         {
-            if (hasThumbsUpInNew && !hasThumbsUpInOld)
-            {
-                outcome = await votingManager.RecordVoteAndCheckOutcome(
-                    votingSession.Id, user.Id, VoteType.For);
-            }
-            else if (!hasThumbsUpInNew && hasThumbsUpInOld)
-            {
-                await votingManager.RemoveVote(votingSession.Id, user.Id, VoteType.For);
-            }
+            outcome = await votingManager.RecordVoteAndCheckOutcome(
+                votingSession.Id, user.Id, VoteType.For);
         }
 
-        // Process thumbs-down vote
-        if (thumbsDownChanged)
+        if (thumbsDownChanged && hasThumbsDownInNew && !hasThumbsDownInOld)
         {
-            if (hasThumbsDownInNew && !hasThumbsDownInOld)
-            {
-                outcome = await votingManager.RecordVoteAndCheckOutcome(
-                    votingSession.Id, user.Id, VoteType.Against);
-            }
-            else if (!hasThumbsDownInNew && hasThumbsDownInOld)
-            {
-                await votingManager.RemoveVote(votingSession.Id, user.Id, VoteType.Against);
-            }
+            outcome = await votingManager.RecordVoteAndCheckOutcome(
+                votingSession.Id, user.Id, VoteType.Against);
         }
 
         await HandleVoteOutcome(votingSession, outcome);
@@ -539,13 +532,14 @@ public partial class UpdateHandler(
                         MessageThreadId = votingSession.ThreadId
                     };
 
-                    await gameScheduler.SavePlannedGame(votingSession.GameDateTime, messageInfo);
+                    var savedText = await gameScheduler.SavePlannedGame(
+                        votingSession.GameDateTime, messageInfo, votingSession.CampaignId);
                     await votingManager.DeleteVotingSession(votingSession.Id);
 
                     await bot.EditMessageText(
                         votingSession.ChatId,
                         votingSession.MessageId,
-                        "✅ Совет единогласен — битва записана в летописи! ⚔️",
+                        savedText,
                         parseMode: ParseMode.Html);
                     break;
                 }

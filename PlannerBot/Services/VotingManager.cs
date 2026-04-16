@@ -318,11 +318,8 @@ public class VotingManager
             .Where(v => v.VoteSessionId == votingSessionId)
             .ExecuteDeleteAsync();
 
-        var votingMessage = await _db.VoteSessions.FirstOrDefaultAsync(vm => vm.Id == votingSessionId);
-        if (votingMessage is not null)
-        {
-            _db.VoteSessions.Remove(votingMessage);
-            await _db.SaveChangesAsync();
-        }
+        await _db.VoteSessions
+            .Where(vs => vs.Id == votingSessionId)
+            .ExecuteDeleteAsync();
     }
 }

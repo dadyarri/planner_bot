@@ -17,8 +17,15 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
     {
         logger.LogInformation("Sending reminder");
 
-        var savedGame = await db.SavedGame.FirstOrDefaultAsync(
-            sg => sg.Id == context.Request.SavedGameId, cancellationToken);
+        var savedGame = await db.SavedGame
+            .Include(sg => sg.Campaign)
+                .ThenInclude(c => c.ForumThread)
+            .Include(sg => sg.Campaign)
+                .ThenInclude(c => c.DungeonMaster)
+            .Include(sg => sg.Campaign)
+                .ThenInclude(c => c.Members)
+                    .ThenInclude(m => m.User)
+            .FirstOrDefaultAsync(sg => sg.Id == context.Request.SavedGameId, cancellationToken);
 
         if (savedGame is null)
         {
@@ -70,14 +77,25 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
         var availablePlayerTags = availablePlayers.Select(u => $"@{u}").ToList();
         var interval = TimeSpan.FromMinutes(context.Request.ReminderIntervalMinutes);
 
+        var campaign = savedGame.Campaign;
+        var campaignName = campaign.ForumThread.Name;
+        var dmMention = $"@{campaign.DungeonMaster.Username}";
+        var memberMentions = campaign.Members
+            .Where(m => m.User.IsActive && m.UserId != campaign.DungeonMasterId)
+            .Select(m => $"@{m.User.Username}");
+
         var message = $"""
                        {string.Join(", ", availablePlayerTags)}
 
                        🚨 🚨 🚨 Герольды трубят — битва начнётся через {interval.Humanize(culture: timeZoneUtilities.GetRussianCultureInfo(), toWords: true)}! 🚨 🚨 🚨
+
+                       <b>Кампания:</b> {campaignName}
+                       <b>Мастер:</b> {dmMention}
+                       <b>Игроки:</b> {string.Join(", ", memberMentions)}
                        """;
 
         await bot.SendMessage(context.Request.ChatId, messageThreadId: context.Request.ThreadId,
-            text: message, cancellationToken: cancellationToken);
+            text: message, parseMode: ParseMode.Html, cancellationToken: cancellationToken);
     }
 
     [TickerFunction("send_weekly_voting_reminder")]

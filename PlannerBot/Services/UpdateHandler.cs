@@ -27,6 +27,7 @@ public partial class UpdateHandler(
     SlotCalculator slotCalculator,
     ForumThreadTracker forumThreadTracker,
     CampaignManager campaignManager,
+    CampaignOrderService campaignOrderService,
     AppDbContext db) : IUpdateHandler
 {
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
@@ -369,6 +370,22 @@ public partial class UpdateHandler(
                         break;
                     }
 
+                    // Soft order enforcement
+                    if (await commandHandler.IsOutOfTurn(callbackQuery.Message!.Chat.Id, campaign))
+                    {
+                        var currentCampaign = await campaignOrderService.GetCurrentCampaign(callbackQuery.Message!.Chat.Id);
+                        var currentName = currentCampaign?.ForumThread.Name ?? "другая кампания";
+                        var currentDmName = currentCampaign?.DungeonMaster.Name ?? "Мастер";
+                        var outOfTurnKeyboard = keyboardGenerator.GenerateOutOfTurnKeyboard(campaignId, DateTime.UnixEpoch, "vote", user.Id);
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            $"⚠️ Сейчас не ваш черёд, Мастер! Первой в очереди стоит кампания <b>{currentName}</b> (Мастер: {currentDmName}). Вы всё равно хотите продолжить?",
+                            parseMode: ParseMode.Html,
+                            replyMarkup: new InlineKeyboardMarkup(outOfTurnKeyboard));
+                        break;
+                    }
+
                     // Delete the campaign picker message and show slot picker
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
                     await commandHandler.ShowSlotPickerForCampaign(
@@ -584,6 +601,22 @@ public partial class UpdateHandler(
                         break;
                     }
 
+                    // Soft order enforcement
+                    if (await commandHandler.IsOutOfTurn(callbackQuery.Message!.Chat.Id, campaign))
+                    {
+                        var currentCampaign = await campaignOrderService.GetCurrentCampaign(callbackQuery.Message!.Chat.Id);
+                        var currentName = currentCampaign?.ForumThread.Name ?? "другая кампания";
+                        var currentDmName = currentCampaign?.DungeonMaster.Name ?? "Мастер";
+                        var outOfTurnKeyboard = keyboardGenerator.GenerateOutOfTurnKeyboard(campaignId, slotUtc, "vote", user.Id);
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            $"⚠️ Сейчас не ваш черёд, Мастер! Первой в очереди стоит кампания <b>{currentName}</b> (Мастер: {currentDmName}). Вы всё равно хотите продолжить?",
+                            parseMode: ParseMode.Html,
+                            replyMarkup: new InlineKeyboardMarkup(outOfTurnKeyboard));
+                        break;
+                    }
+
                     // Build active member list
                     var memberUserIds = campaign.Members.Select(m => m.UserId).ToList();
                     var memberUsers = await db.Users
@@ -677,6 +710,236 @@ public partial class UpdateHandler(
                     if (user is null) return;
 
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    break;
+                }
+            case CallbackActions.OrderOverride:
+                {
+                    // oo;{campaignId};{flowType};{paramUnixTime};{userId}
+                    var campaignId = int.Parse(split[1]);
+                    var flowType = split[2];
+                    var paramUnixTime = long.Parse(split[3]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[4]));
+                    if (user is null) return;
+
+                    var campaign = await db.Campaigns
+                        .Include(c => c.ForumThread)
+                        .Include(c => c.Members)
+                        .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                    if (campaign is null)
+                    {
+                        await bot.EditMessageText(
+                            callbackQuery.Message!.Chat.Id,
+                            callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (campaign.DungeonMasterId != user.Id)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Только Мастер Подземелий может начать голосование!");
+                        break;
+                    }
+
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+
+                    if (flowType == "vote")
+                    {
+                        // paramUnixTime == 0 means slot-picker mode (no specific datetime yet)
+                        if (paramUnixTime == 0)
+                        {
+                            await commandHandler.ShowSlotPickerForCampaign(
+                                callbackQuery.Message.Chat.Id,
+                                callbackQuery.Message.MessageThreadId,
+                                campaignId,
+                                user.Id);
+                        }
+                        else
+                        {
+                            var slotUtc = DateTime.SpecifyKind(
+                                DateTimeOffset.FromUnixTimeSeconds(paramUnixTime).UtcDateTime,
+                                DateTimeKind.Utc);
+
+                            var memberUserIds = campaign.Members.Select(m => m.UserId).ToList();
+                            var memberUsers = await db.Users
+                                .Where(u => memberUserIds.Contains(u.Id) && u.IsActive)
+                                .ToListAsync();
+
+                            var conflictingCampaigns = await commandHandler.GetConflictingCampaignNames(
+                                campaignId, slotUtc, memberUsers.Select(u => u.Id).ToList());
+
+                            if (conflictingCampaigns.Count > 0)
+                            {
+                                var conflictList = string.Join("\n", conflictingCampaigns.Select(n => $"  — {n}"));
+                                var collisionKeyboard = keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
+                                await bot.SendMessage(
+                                    callbackQuery.Message.Chat.Id,
+                                    messageThreadId: callbackQuery.Message.MessageThreadId,
+                                    text: $"⚠️ Внимание, Мастер! В этот день уже записаны битвы в других кампаниях:\n\n{conflictList}\n\nНекоторые воины могут быть заняты. Продолжить голосование?",
+                                    parseMode: ParseMode.Html,
+                                    replyMarkup: new InlineKeyboardMarkup(collisionKeyboard));
+                                break;
+                            }
+
+                            var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
+                            await votingManager.SendVotingMessage(
+                                campaign.ForumThread.ChatId,
+                                campaign.ForumThread.ThreadId,
+                                slotUtc,
+                                user.Id,
+                                activeMentions,
+                                keyboardGenerator,
+                                campaignId);
+                        }
+                    }
+
+                    break;
+                }
+            case CallbackActions.OrderCancel:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        "Отменено.",
+                        parseMode: ParseMode.Html);
+                    break;
+                }
+            case CallbackActions.OrderNextSelect:
+                {
+                    // ons;{campaignId};{userId}
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    var campaign = await db.Campaigns
+                        .Include(c => c.ForumThread)
+                        .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                    if (campaign?.DungeonMasterId != user.Id)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Только Мастер Подземелий может передать ход!");
+                        break;
+                    }
+
+                    await campaignOrderService.AdvanceTurn(callbackQuery.Message!.Chat.Id, campaign.ForumThread.Name);
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        "🔄 Ход передан.",
+                        parseMode: ParseMode.Html);
+                    break;
+                }
+            case CallbackActions.OrderSetToggle:
+                {
+                    // ost;{campaignId};{serialisedState};{userId}
+                    var campaignId = int.Parse(split[1]);
+                    var serialisedState = split[2];
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[3]));
+                    if (user is null) return;
+
+                    var assigned = KeyboardGenerator.ParseOrderState(serialisedState);
+
+                    if (assigned.ContainsKey(campaignId))
+                    {
+                        // Remove and re-compact positions
+                        assigned.Remove(campaignId);
+                        var sorted = assigned.OrderBy(kv => kv.Value).Select(kv => kv.Key).ToList();
+                        assigned = sorted.Select((id, idx) => (id, idx)).ToDictionary(x => x.id, x => x.idx);
+                    }
+                    else
+                    {
+                        // Assign the next available position
+                        var nextPos = assigned.Count == 0 ? 0 : assigned.Values.Max() + 1;
+                        assigned[campaignId] = nextPos;
+                    }
+
+                    var newState = KeyboardGenerator.SerialiseOrderState(assigned);
+
+                    // Rebuild saved state: it's in the last button's callback data — parse from existing keyboard
+                    var savedState = string.Empty;
+                    if (callbackQuery.Message?.ReplyMarkup?.InlineKeyboard is { } rows)
+                    {
+                        var lastRow = rows.LastOrDefault();
+                        var resetButton = lastRow?.FirstOrDefault();
+                        if (resetButton?.CallbackData is { } resetData)
+                        {
+                            var resetParts = resetData.Split(';');
+                            if (resetParts.Length >= 2 && resetParts[0] == CallbackActions.OrderSetReset)
+                                savedState = resetParts[1];
+                        }
+                    }
+
+                    var allCampaigns = await campaignManager.GetActiveCampaigns(callbackQuery.Message!.Chat.Id);
+                    var keyboard = keyboardGenerator.GenerateOrderSetKeyboard(allCampaigns, newState, savedState, user.Id);
+
+                    await bot.EditMessageReplyMarkup(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        new InlineKeyboardMarkup(keyboard));
+                    break;
+                }
+            case CallbackActions.OrderSetReset:
+                {
+                    // osr;{savedState};{userId}
+                    var savedState = split[1];
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    var allCampaigns = await campaignManager.GetActiveCampaigns(callbackQuery.Message!.Chat.Id);
+                    var keyboard = keyboardGenerator.GenerateOrderSetKeyboard(allCampaigns, savedState, savedState, user.Id);
+
+                    await bot.EditMessageReplyMarkup(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        new InlineKeyboardMarkup(keyboard));
+                    break;
+                }
+            case CallbackActions.OrderSetCancel:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    break;
+                }
+            case CallbackActions.OrderSetSave:
+                {
+                    // oss;{serialisedState};{userId}
+                    var serialisedState = split[1];
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    var assigned = KeyboardGenerator.ParseOrderState(serialisedState);
+                    var orderedIds = assigned.OrderBy(kv => kv.Value).Select(kv => kv.Key).ToList();
+
+                    await campaignOrderService.SetOrder(callbackQuery.Message!.Chat.Id, orderedIds);
+
+                    // Show updated /order list
+                    var orderedCampaigns = await campaignOrderService.GetOrderedCampaigns(callbackQuery.Message!.Chat.Id);
+                    var currentCampaign = await campaignOrderService.GetCurrentCampaign(callbackQuery.Message!.Chat.Id);
+
+                    var sb = new StringBuilder();
+                    sb.AppendLine("📜 <b>Очерёдность походов:</b>");
+                    for (var i = 0; i < orderedCampaigns.Count; i++)
+                    {
+                        var c = orderedCampaigns[i];
+                        var isCurrent = currentCampaign is not null && currentCampaign.Id == c.Id;
+                        var prefix = isCurrent ? "🎯 " : string.Empty;
+                        sb.AppendLine($"{prefix}{i + 1}. <b>{c.ForumThread.Name}</b> (Мастер: {c.DungeonMaster.Name})");
+                    }
+
+                    await bot.EditMessageText(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.Id,
+                        sb.ToString(),
+                        parseMode: ParseMode.Html);
                     break;
                 }
         }

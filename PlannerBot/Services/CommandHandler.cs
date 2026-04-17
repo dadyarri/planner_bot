@@ -27,6 +27,7 @@ public class CommandHandler(
     VotingManager votingManager,
     TimeZoneUtilities timeZoneUtilities,
     CampaignManager campaignManager,
+    CampaignOrderService campaignOrderService,
     ITimeTickerManager<TimeTickerEntity> ticker,
     ICronTickerManager<CronTickerEntity> cronTicker,
     ILogger<UpdateHandler> logger)
@@ -89,6 +90,12 @@ public class CommandHandler(
             case "/service_thread":
                 await HandleServiceThreadCommand(msg);
                 break;
+            case "/order":
+                await HandleOrderCommand(msg);
+                break;
+            case "/order_set":
+                await HandleOrderSetCommand(msg);
+                break;
         }
     }
 
@@ -116,6 +123,10 @@ public class CommandHandler(
                 /campaign_leave - Покинуть ряды кампании
                 /campaign_pause - Приостановить кампанию (только Мастер)
                 /service_thread - Пометить поток как служебный
+
+                <b>📋 Очерёдность кампаний:</b>
+                /order - Показать очередь кампаний
+                /order_set - Настроить порядок кампаний (только Мастер)
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
     }
@@ -317,6 +328,15 @@ public class CommandHandler(
                         return;
                     }
 
+                    // Soft order enforcement
+                    if (await IsOutOfTurn(msg.Chat.Id, campaign))
+                    {
+                        var currentCampaign = await campaignOrderService.GetCurrentCampaign(msg.Chat.Id);
+                        await SendOutOfTurnWarning(msg.Chat.Id, msg.MessageThreadId, campaign.Id,
+                            DateTime.UnixEpoch, "vote", user.Id, currentCampaign);
+                        return;
+                    }
+
                     await ShowSlotPickerForCampaign(msg.Chat.Id, msg.MessageThreadId, campaign.Id, user.Id);
                     return;
                 }
@@ -395,6 +415,15 @@ public class CommandHandler(
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "⚠️ Только Мастер Подземелий может начать голосование в этой кампании!",
                 parseMode: ParseMode.Html, linkPreviewOptions: true);
+            return;
+        }
+
+        // Soft order enforcement
+        if (await IsOutOfTurn(msg.Chat.Id, campaign))
+        {
+            var currentCampaign = await campaignOrderService.GetCurrentCampaign(msg.Chat.Id);
+            await SendOutOfTurnWarning(msg.Chat.Id, msg.MessageThreadId, campaign.Id,
+                utcGameDateTime, "vote", user.Id, currentCampaign);
             return;
         }
 
@@ -897,5 +926,102 @@ public class CommandHandler(
         await db.SaveChangesAsync();
 
         return user;
+    }
+
+    /// <summary>
+    /// Returns true if the given campaign is out of turn in the rotation.
+    /// Returns false if no rotation is configured, or the campaign is not in the rotation.
+    /// </summary>
+    internal async Task<bool> IsOutOfTurn(long chatId, Campaign campaign)
+    {
+        if (!campaign.OrderIndex.HasValue)
+            return false;
+
+        var currentCampaign = await campaignOrderService.GetCurrentCampaign(chatId);
+        return currentCampaign is not null && currentCampaign.Id != campaign.Id;
+    }
+
+    /// <summary>
+    /// Sends the out-of-turn warning message with proceed/cancel keyboard.
+    /// </summary>
+    internal async Task SendOutOfTurnWarning(
+        long chatId, int? threadId, int campaignId, DateTime slotUtc, string flowType,
+        long userId, Campaign? currentCampaign)
+    {
+        var currentName = currentCampaign?.ForumThread.Name ?? "другая кампания";
+        var currentDmName = currentCampaign?.DungeonMaster.Name ?? "Мастер";
+
+        var keyboard = keyboardGenerator.GenerateOutOfTurnKeyboard(campaignId, slotUtc, flowType, userId);
+        await bot.SendMessage(chatId, messageThreadId: threadId,
+            text: $"⚠️ Сейчас не ваш черёд, Мастер! Первой в очереди стоит кампания <b>{currentName}</b> (Мастер: {currentDmName}). Вы всё равно хотите продолжить?",
+            parseMode: ParseMode.Html, linkPreviewOptions: true,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
+    }
+
+    private async Task HandleOrderCommand(Message msg)
+    {
+        var orderedCampaigns = await campaignOrderService.GetOrderedCampaigns(msg.Chat.Id);
+
+        if (orderedCampaigns.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "📜 Очерёдность не установлена. Используй /order_set, чтобы настроить порядок кампаний.",
+                parseMode: ParseMode.Html, linkPreviewOptions: true);
+            return;
+        }
+
+        var currentCampaign = await campaignOrderService.GetCurrentCampaign(msg.Chat.Id);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("📜 <b>Очерёдность походов:</b>");
+
+        for (var i = 0; i < orderedCampaigns.Count; i++)
+        {
+            var c = orderedCampaigns[i];
+            var isCurrent = currentCampaign is not null && currentCampaign.Id == c.Id;
+            var prefix = isCurrent ? "🎯 " : string.Empty;
+            sb.AppendLine($"{prefix}{i + 1}. <b>{c.ForumThread.Name}</b> (Мастер: {c.DungeonMaster.Name})");
+        }
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: sb.ToString(), parseMode: ParseMode.Html, linkPreviewOptions: true);
+    }
+
+    private async Task HandleOrderSetCommand(Message msg)
+    {
+        var user = await EnsureUser(msg);
+
+        // Check that user is a DM of at least one campaign in this chat
+        var allCampaigns = await campaignManager.GetActiveCampaigns(msg.Chat.Id);
+        var isDm = allCampaigns.Any(c => c.DungeonMasterId == user.Id);
+
+        if (!isDm)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ Только Мастера Подземелий могут настраивать порядок кампаний.",
+                parseMode: ParseMode.Html, linkPreviewOptions: true);
+            return;
+        }
+
+        if (allCampaigns.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ В этом чате нет активных кампаний.",
+                parseMode: ParseMode.Html, linkPreviewOptions: true);
+            return;
+        }
+
+        // Build the current saved state from existing OrderIndex values
+        var savedState = KeyboardGenerator.SerialiseOrderState(
+            allCampaigns
+                .Where(c => c.OrderIndex.HasValue)
+                .ToDictionary(c => c.Id, c => c.OrderIndex!.Value));
+
+        var keyboard = keyboardGenerator.GenerateOrderSetKeyboard(allCampaigns, savedState, savedState, user.Id);
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: "🗂️ Настрой порядок кампаний — нажимай кнопки по очереди, чтобы задать порядок:",
+            parseMode: ParseMode.Html, linkPreviewOptions: true,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
     }
 }

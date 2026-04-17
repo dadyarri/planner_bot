@@ -295,4 +295,89 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
         return buttons.ToArray();
     }
+
+    /// <summary>
+    /// Generates the out-of-turn warning keyboard for when a DM uses /vote out of rotation.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateOutOfTurnKeyboard(int campaignId, DateTime slotUtc, string flowType, long userId)
+    {
+        return
+        [
+            [
+                InlineKeyboardButton.WithCallbackData(
+                    "✅ Продолжить",
+                    $"{CallbackActions.OrderOverride};{campaignId};{flowType};{new DateTimeOffset(slotUtc).ToUnixTimeSeconds()};{userId}"),
+                InlineKeyboardButton.WithCallbackData(
+                    "❌ Отмена",
+                    $"{CallbackActions.OrderCancel};{userId}")
+            ]
+        ];
+    }
+
+    /// <summary>
+    /// Generates the /order_set inline keyboard for configuring campaign turn order.
+    /// <paramref name="serialisedState"/> is a comma-separated list of "campaignId:position" pairs (empty string if none assigned).
+    /// <paramref name="savedState"/> is the original state when the keyboard was opened (used for the Reset button).
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateOrderSetKeyboard(
+        IReadOnlyList<Campaign> campaigns, string serialisedState, string savedState, long userId)
+    {
+        var assigned = ParseOrderState(serialisedState);
+
+        var buttons = campaigns
+            .Select(c =>
+            {
+                var posLabel = assigned.TryGetValue(c.Id, out var pos) ? $" [{pos + 1}]" : string.Empty;
+                return new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        $"⚔️ {c.ForumThread.Name}{posLabel}",
+                        $"{CallbackActions.OrderSetToggle};{c.Id};{serialisedState};{userId}")
+                };
+            })
+            .ToList();
+
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "🔄 Сброс",
+                $"{CallbackActions.OrderSetReset};{savedState};{userId}"),
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Отмена",
+                $"{CallbackActions.OrderSetCancel};{userId}"),
+            InlineKeyboardButton.WithCallbackData(
+                "💾 Сохранить",
+                $"{CallbackActions.OrderSetSave};{serialisedState};{userId}")
+        ]);
+
+        return buttons.ToArray();
+    }
+
+    /// <summary>
+    /// Parses a serialised order state string into a dictionary of campaignId → 0-based position.
+    /// </summary>
+    public static Dictionary<int, int> ParseOrderState(string serialisedState)
+    {
+        var result = new Dictionary<int, int>();
+        if (string.IsNullOrEmpty(serialisedState))
+            return result;
+
+        foreach (var pair in serialisedState.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split(':');
+            if (parts.Length == 2 && int.TryParse(parts[0], out var cId) && int.TryParse(parts[1], out var p))
+                result[cId] = p;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Serialises a dictionary of campaignId → 0-based position into a state string.
+    /// </summary>
+    public static string SerialiseOrderState(Dictionary<int, int> state)
+    {
+        return string.Join(",", state.Select(kv => $"{kv.Key}:{kv.Value}"));
+    }
 }
+

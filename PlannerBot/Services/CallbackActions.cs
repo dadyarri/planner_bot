@@ -60,4 +60,25 @@ public static class CallbackActions
 
     /// <summary>DM selected a campaign from the picker for /unsave in a service thread.</summary>
     public const string UnsaveCampaignPick = "ucp";
+
+    /// <summary>DM confirmed proceeding with a vote despite being out of turn.</summary>
+    public const string OrderOverride = "oo";
+
+    /// <summary>User cancelled the out-of-turn warning keyboard.</summary>
+    public const string OrderCancel = "oc";
+
+    /// <summary>DM explicitly yielded their turn via /order_next (not yet implemented as a command).</summary>
+    public const string OrderNextSelect = "ons";
+
+    /// <summary>DM toggled a campaign's position in the /order_set keyboard.</summary>
+    public const string OrderSetToggle = "ost";
+
+    /// <summary>DM reset the /order_set keyboard to the last saved state.</summary>
+    public const string OrderSetReset = "osr";
+
+    /// <summary>DM dismissed the /order_set keyboard without saving.</summary>
+    public const string OrderSetCancel = "osc";
+
+    /// <summary>DM saved the new campaign order from the /order_set keyboard.</summary>
+    public const string OrderSetSave = "oss";
 }

@@ -7,7 +7,7 @@ namespace PlannerBot.Services;
 /// Manages campaign CRUD operations — creation, membership, soft-deletion,
 /// and service thread designation.
 /// </summary>
-public class CampaignManager(AppDbContext db, ILogger<CampaignManager> logger)
+public class CampaignManager(AppDbContext db, ILogger<CampaignManager> logger, CampaignOrderService campaignOrderService)
 {
     /// <summary>
     /// Creates a new campaign in the specified forum thread.
@@ -121,6 +121,7 @@ public class CampaignManager(AppDbContext db, ILogger<CampaignManager> logger)
     public async Task<string?> DeleteCampaign(int campaignId, long userId)
     {
         var campaign = await db.Campaigns
+            .Include(c => c.ForumThread)
             .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
 
         if (campaign is null)
@@ -133,10 +134,19 @@ public class CampaignManager(AppDbContext db, ILogger<CampaignManager> logger)
             return "⚠️ Только Мастер Подземелий может завершить кампанию!";
         }
 
+        var previousName = campaign.ForumThread.Name;
+        var chatId = campaign.ForumThread.ChatId;
+        var wasInRotation = campaign.OrderIndex.HasValue;
+
         campaign.IsActive = false;
+        campaign.OrderIndex = null;
         await db.SaveChangesAsync();
 
         logger.LogInformation("Campaign {CampaignId} deleted by DM {DmId}", campaignId, userId);
+
+        if (wasInRotation)
+            await campaignOrderService.AdvanceTurn(chatId, previousName);
+
         return null;
     }
 

@@ -373,16 +373,7 @@ public partial class UpdateHandler(
                     // Soft order enforcement
                     if (await commandHandler.IsOutOfTurn(callbackQuery.Message!.Chat.Id, campaign))
                     {
-                        var currentCampaign = await campaignOrderService.GetCurrentCampaign(callbackQuery.Message!.Chat.Id);
-                        var currentName = currentCampaign?.ForumThread.Name ?? "другая кампания";
-                        var currentDmName = currentCampaign?.DungeonMaster.Name ?? "Мастер";
-                        var outOfTurnKeyboard = keyboardGenerator.GenerateOutOfTurnKeyboard(campaignId, DateTime.UnixEpoch, "vote", user.Id);
-                        await bot.EditMessageText(
-                            callbackQuery.Message!.Chat.Id,
-                            callbackQuery.Message.Id,
-                            $"⚠️ Сейчас не ваш черёд, Мастер! Первой в очереди стоит кампания <b>{currentName}</b> (Мастер: {currentDmName}). Вы всё равно хотите продолжить?",
-                            parseMode: ParseMode.Html,
-                            replyMarkup: new InlineKeyboardMarkup(outOfTurnKeyboard));
+                        await EditMessageWithOutOfTurnWarning(callbackQuery, campaignId, DateTime.UnixEpoch, "vote", user.Id);
                         break;
                     }
 
@@ -604,16 +595,7 @@ public partial class UpdateHandler(
                     // Soft order enforcement
                     if (await commandHandler.IsOutOfTurn(callbackQuery.Message!.Chat.Id, campaign))
                     {
-                        var currentCampaign = await campaignOrderService.GetCurrentCampaign(callbackQuery.Message!.Chat.Id);
-                        var currentName = currentCampaign?.ForumThread.Name ?? "другая кампания";
-                        var currentDmName = currentCampaign?.DungeonMaster.Name ?? "Мастер";
-                        var outOfTurnKeyboard = keyboardGenerator.GenerateOutOfTurnKeyboard(campaignId, slotUtc, "vote", user.Id);
-                        await bot.EditMessageText(
-                            callbackQuery.Message!.Chat.Id,
-                            callbackQuery.Message.Id,
-                            $"⚠️ Сейчас не ваш черёд, Мастер! Первой в очереди стоит кампания <b>{currentName}</b> (Мастер: {currentDmName}). Вы всё равно хотите продолжить?",
-                            parseMode: ParseMode.Html,
-                            replyMarkup: new InlineKeyboardMarkup(outOfTurnKeyboard));
+                        await EditMessageWithOutOfTurnWarning(callbackQuery, campaignId, slotUtc, "vote", user.Id);
                         break;
                     }
 
@@ -1122,5 +1104,22 @@ public partial class UpdateHandler(
 
         return user;
     }
-}
 
+    /// <summary>
+    /// Edits an existing callback message to show the out-of-turn warning with proceed/cancel keyboard.
+    /// </summary>
+    private async Task EditMessageWithOutOfTurnWarning(
+        CallbackQuery callbackQuery, int campaignId, DateTime slotUtc, string flowType, long userId)
+    {
+        var currentCampaign = await campaignOrderService.GetCurrentCampaign(callbackQuery.Message!.Chat.Id);
+        var currentName = currentCampaign?.ForumThread.Name ?? "другая кампания";
+        var currentDmName = currentCampaign?.DungeonMaster.Name ?? "Мастер";
+        var outOfTurnKeyboard = keyboardGenerator.GenerateOutOfTurnKeyboard(campaignId, slotUtc, flowType, userId);
+        await bot.EditMessageText(
+            callbackQuery.Message!.Chat.Id,
+            callbackQuery.Message.Id,
+            $"⚠️ Сейчас не ваш черёд, Мастер! Первой в очереди стоит кампания <b>{currentName}</b> (Мастер: {currentDmName}). Вы всё равно хотите продолжить?",
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(outOfTurnKeyboard));
+    }
+}

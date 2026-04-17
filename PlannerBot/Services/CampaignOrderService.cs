@@ -10,7 +10,6 @@ namespace PlannerBot.Services;
 /// </summary>
 public class CampaignOrderService(AppDbContext db, ITelegramBotClient bot, ILogger<CampaignOrderService> logger)
 {
-    private const int MaxAdvanceAttempts = 10;
 
     /// <summary>
     /// Returns all active campaigns in the chat that participate in the rotation,
@@ -40,22 +39,19 @@ public class CampaignOrderService(AppDbContext db, ITelegramBotClient bot, ILogg
         if (campaigns.Count == 0)
             return null;
 
-        for (var attempt = 0; attempt < MaxAdvanceAttempts; attempt++)
-        {
-            var current = campaigns.FirstOrDefault(c => c.OrderIndex == state.CurrentIndex);
-            if (current is not null)
-                return current;
+        var current = campaigns.FirstOrDefault(c => c.OrderIndex == state.CurrentIndex);
+        if (current is not null)
+            return current;
 
-            // Pointer is stale — advance to the next valid campaign
-            var next = campaigns.FirstOrDefault(c => c.OrderIndex > state.CurrentIndex)
-                       ?? campaigns.First();
-            state.CurrentIndex = next.OrderIndex!.Value;
-            await db.SaveChangesAsync();
-        }
+        // Pointer is stale — find the next valid campaign by walking forward from CurrentIndex
+        var next = campaigns.FirstOrDefault(c => c.OrderIndex > state.CurrentIndex)
+                   ?? campaigns.First();
+        state.CurrentIndex = next.OrderIndex!.Value;
+        await db.SaveChangesAsync();
 
-        logger.LogWarning("CampaignOrderService: could not resolve current campaign for chat {ChatId} after {Attempts} attempts",
-            chatId, MaxAdvanceAttempts);
-        return null;
+        logger.LogWarning("CampaignOrderService: stale pointer in chat {ChatId}, advanced to campaign {CampaignId}",
+            chatId, next.Id);
+        return next;
     }
 
     /// <summary>
@@ -77,7 +73,8 @@ public class CampaignOrderService(AppDbContext db, ITelegramBotClient bot, ILogg
 
         state.CurrentIndex = nextCampaign.OrderIndex!.Value;
 
-        // Ensure the next campaign is active
+        // Ensure the next campaign is marked active. In normal flow it should already be active,
+        // but this guards against edge cases where a campaign was deactivated without going through DeleteCampaign.
         nextCampaign.IsActive = true;
 
         await db.SaveChangesAsync();

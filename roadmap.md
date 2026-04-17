@@ -73,10 +73,3 @@ The user with username `dadyarri` has elevated privileges:
 - `/campaign_new` shows a DM picker so they can assign any active user as the DM of the new campaign.
 
 ---
-
-## Possible Future Improvements
-
-- Allow campaigns to opt out of the turn rotation individually.
-- Add a `/campaign_pause` command to soft-delete a campaign (set `IsActive = false`) and automatically advance the turn.
-- Persist `AvailableSlot` cache refresh timestamps per campaign so stale slots can be detected.
-- Multi-language support (English in addition to Russian).

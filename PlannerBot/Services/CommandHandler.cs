@@ -345,18 +345,23 @@ public class CommandHandler(
                 }
             }
 
-            // Service thread or unknown — show DM campaign picker
-            var dmCampaigns = await campaignManager.GetDmCampaigns(user.Id);
-            if (dmCampaigns.Count == 0)
+            // Service thread or unknown — show campaign picker (all campaigns for super admin, DM campaigns otherwise)
+            var availableCampaigns = IsSuperAdmin(user)
+                ? await campaignManager.GetActiveCampaigns(msg.Chat.Id)
+                : await campaignManager.GetDmCampaigns(user.Id);
+            if (availableCampaigns.Count == 0)
             {
+                var noCampaignsText = IsSuperAdmin(user)
+                    ? "⚠️ В этом чате нет активных кампаний."
+                    : "⚠️ У тебя нет кампаний, которыми ты управляешь. Используй /campaign_new в потоке форума.";
                 await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                    text: "⚠️ У тебя нет кампаний, которыми ты управляешь. Используй /campaign_new в потоке форума.",
+                    text: noCampaignsText,
                     parseMode: ParseMode.Html, linkPreviewOptions: true);
                 return;
             }
 
             var slotPickerKeyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
-                CallbackActions.VotePickCampaign, dmCampaigns, user.Id);
+                CallbackActions.VotePickCampaign, availableCampaigns, user.Id);
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "🎯 Выбери кампанию, для которой хочешь захватить слот:",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,
@@ -393,18 +398,23 @@ public class CommandHandler(
         // Resolve campaign from current thread
         if (campaign is null)
         {
-            // Not in a campaign thread — show DM campaign picker with the target timestamp embedded
-            var dmCampaigns = await campaignManager.GetDmCampaigns(user.Id);
-            if (dmCampaigns.Count == 0)
+            // Not in a campaign thread — show campaign picker (all campaigns for super admin, DM campaigns otherwise)
+            var availableCampaigns = IsSuperAdmin(user)
+                ? await campaignManager.GetActiveCampaigns(msg.Chat.Id)
+                : await campaignManager.GetDmCampaigns(user.Id);
+            if (availableCampaigns.Count == 0)
             {
+                var noCampaignsText = IsSuperAdmin(user)
+                    ? "⚠️ В этом чате нет активных кампаний."
+                    : "⚠️ У тебя нет кампаний, которыми ты управляешь. Используй /campaign_new в потоке форума.";
                 await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                    text: "⚠️ У тебя нет кампаний, которыми ты управляешь. Используй /campaign_new в потоке форума.",
+                    text: noCampaignsText,
                     parseMode: ParseMode.Html, linkPreviewOptions: true);
                 return;
             }
 
             var pickerKeyboard = keyboardGenerator.GenerateVoteCampaignPickerKeyboard(
-                dmCampaigns, utcGameDateTime, user.Id);
+                availableCampaigns, utcGameDateTime, user.Id);
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: $"🗡️ Выбери кампанию для голосования за {timeZoneUtilities.FormatDateTime(timeZoneUtilities.ConvertToMoscow(utcGameDateTime))}:",
                 parseMode: ParseMode.Html, linkPreviewOptions: true,

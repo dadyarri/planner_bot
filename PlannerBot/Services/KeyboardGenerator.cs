@@ -298,15 +298,18 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
     /// <summary>
     /// Generates the out-of-turn warning keyboard for when a DM uses /vote out of rotation.
+    /// Uses compact datetime format (yyMMddHHmm) for the slot, or "0" as a sentinel when no
+    /// specific datetime is known yet (slot-picker mode).
     /// </summary>
     public InlineKeyboardButton[][] GenerateOutOfTurnKeyboard(int campaignId, DateTime slotUtc, string flowType, long userId)
     {
+        var slotParam = slotUtc == DateTime.UnixEpoch ? "0" : slotUtc.ToString("yyMMddHHmm");
         return
         [
             [
                 InlineKeyboardButton.WithCallbackData(
                     "✅ Продолжить",
-                    $"{CallbackActions.OrderOverride};{campaignId};{flowType};{new DateTimeOffset(slotUtc).ToUnixTimeSeconds()};{userId}"),
+                    $"{CallbackActions.OrderOverride};{campaignId};{flowType};{slotParam};{userId}"),
                 InlineKeyboardButton.WithCallbackData(
                     "❌ Отмена",
                     $"{CallbackActions.OrderCancel};{userId}")

@@ -696,10 +696,11 @@ public partial class UpdateHandler(
                 }
             case CallbackActions.OrderOverride:
                 {
-                    // oo;{campaignId};{flowType};{paramUnixTime};{userId}
+                    // oo;{campaignId};{flowType};{slotParam};{userId}
+                    // slotParam is "0" for slot-picker mode, or yyMMddHHmm datetime for direct vote
                     var campaignId = int.Parse(split[1]);
                     var flowType = split[2];
-                    var paramUnixTime = long.Parse(split[3]);
+                    var slotParam = split[3];
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[4]));
                     if (user is null) return;
 
@@ -729,8 +730,8 @@ public partial class UpdateHandler(
 
                     if (flowType == "vote")
                     {
-                        // paramUnixTime == 0 means slot-picker mode (no specific datetime yet)
-                        if (paramUnixTime == 0)
+                        // slotParam == "0" means slot-picker mode (no specific datetime yet)
+                        if (slotParam == "0")
                         {
                             await commandHandler.ShowSlotPickerForCampaign(
                                 callbackQuery.Message.Chat.Id,
@@ -741,7 +742,7 @@ public partial class UpdateHandler(
                         else
                         {
                             var slotUtc = DateTime.SpecifyKind(
-                                DateTimeOffset.FromUnixTimeSeconds(paramUnixTime).UtcDateTime,
+                                DateTime.ParseExact(slotParam, "yyMMddHHmm", CultureInfo.InvariantCulture),
                                 DateTimeKind.Utc);
 
                             var memberUserIds = campaign.Members.Select(m => m.UserId).ToList();

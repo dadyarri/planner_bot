@@ -32,7 +32,7 @@ public static class CallbackActions
     public const string CampaignLeave = "cl";
 
     /// <summary>DM selected a campaign from the campaign picker to delete.</summary>
-    public const string CampaignPause = "cd";
+    public const string CampaignNext = "cn";
 
     /// <summary>DM selected a campaign from the campaign picker for /vote with no args (service thread flow).</summary>
     public const string VotePickCampaign = "vpc";
@@ -60,4 +60,25 @@ public static class CallbackActions
 
     /// <summary>DM selected a campaign from the picker for /unsave in a service thread.</summary>
     public const string UnsaveCampaignPick = "ucp";
+
+    /// <summary>DM confirmed overriding the turn order to proceed with a /vote out of turn.</summary>
+    public const string OrderOverride = "oo";
+
+    /// <summary>DM cancelled an out-of-turn /vote override warning.</summary>
+    public const string OrderCancel = "oc";
+
+    /// <summary>User toggled a campaign in the /order_set draft.</summary>
+    public const string OrderSetToggle = "ost";
+
+    /// <summary>User reset the /order_set draft to the currently saved order.</summary>
+    public const string OrderSetReset = "osr";
+
+    /// <summary>User cancelled the /order_set flow (draft is discarded).</summary>
+    public const string OrderSetCancel = "osc";
+
+    /// <summary>User saved the /order_set draft as the new campaign order.</summary>
+    public const string OrderSetSave = "oss";
+
+    /// <summary>Super-admin picked a DM from the user list during /campaign_new.</summary>
+    public const string CampaignNewDmPick = "cndp";
 }

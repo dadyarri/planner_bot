@@ -4,7 +4,7 @@ namespace PlannerBot.Services;
 
 partial class UpdateHandler
 {
-    [LoggerMessage(LogLevel.Error, "HandleError: {exception}")]
+    [LoggerMessage(LogLevel.Error, "HandleError")]
     static partial void LogHandleerrorException(ILogger<UpdateHandler> logger, Exception exception);
 
     [LoggerMessage(LogLevel.Information, "Received a message of type {messageType}")]

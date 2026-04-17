@@ -27,6 +27,7 @@ public class CommandHandler(
     VotingManager votingManager,
     TimeZoneUtilities timeZoneUtilities,
     CampaignManager campaignManager,
+    CampaignOrderService campaignOrderService,
     ITimeTickerManager<TimeTickerEntity> ticker,
     ICronTickerManager<CronTickerEntity> cronTicker,
     ILogger<UpdateHandler> logger)
@@ -83,11 +84,17 @@ public class CommandHandler(
             case "/campaign_leave":
                 await HandleCampaignLeaveCommand(msg);
                 break;
-            case "/campaign_pause":
-                await HandleCampaignPauseCommand(msg);
+            case "/campaign_next":
+                await HandleCampaignNextCommand(msg);
                 break;
             case "/service_thread":
                 await HandleServiceThreadCommand(msg);
+                break;
+            case "/order":
+                await HandleOrderCommand(msg);
+                break;
+            case "/order_set":
+                await HandleOrderSetCommand(msg);
                 break;
         }
     }
@@ -114,8 +121,12 @@ public class CommandHandler(
                 /campaign_new - Основать новую кампанию в этом потоке
                 /campaign_join - Вступить в ряды кампании
                 /campaign_leave - Покинуть ряды кампании
-                /campaign_pause - Приостановить кампанию (только Мастер)
+                /campaign_next - Передать ход следующей кампании (только текущий Мастер)
                 /service_thread - Пометить поток как служебный
+
+                <b>🗓️ Очерёдность кампаний:</b>
+                /order - Посмотреть очерёдность походов
+                /order_set - Настроить очерёдность кампаний
                 """, parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new ReplyKeyboardRemove());
     }
@@ -309,11 +320,23 @@ public class CommandHandler(
             {
                 if (campaign is not null)
                 {
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                             text: "⚠️ Только Мастер Подземелий может начать голосование!",
                             parseMode: ParseMode.Html, linkPreviewOptions: true);
+                        return;
+                    }
+
+                    // Soft turn-order enforcement
+                    var currentHolder = await campaignOrderService.GetCurrentCampaign(msg.Chat.Id);
+                    if (currentHolder is not null && currentHolder.Id != campaign.Id)
+                    {
+                        var keyboard = keyboardGenerator.GenerateOrderOverrideKeyboard(campaign.Id, string.Empty, user.Id);
+                        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                            text: $"⚠️ Сейчас очередь кампании <b>{currentHolder.ForumThread.Name}</b>. Продолжить голосование вне очереди?",
+                            parseMode: ParseMode.Html, linkPreviewOptions: true,
+                            replyMarkup: new InlineKeyboardMarkup(keyboard));
                         return;
                     }
 
@@ -390,11 +413,24 @@ public class CommandHandler(
         }
 
         // DM-only
-        if (campaign.DungeonMasterId != user.Id)
+        if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "⚠️ Только Мастер Подземелий может начать голосование в этой кампании!",
                 parseMode: ParseMode.Html, linkPreviewOptions: true);
+            return;
+        }
+
+        // Soft turn-order enforcement
+        var turnHolder = await campaignOrderService.GetCurrentCampaign(msg.Chat.Id);
+        if (turnHolder is not null && turnHolder.Id != campaign.Id)
+        {
+            var overrideKeyboard = keyboardGenerator.GenerateOrderOverrideKeyboard(
+                campaign.Id, utcGameDateTime.ToString("yyMMddHHmm"), user.Id);
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: $"⚠️ Сейчас очередь кампании <b>{turnHolder.ForumThread.Name}</b>. Продолжить голосование вне очереди?",
+                parseMode: ParseMode.Html, linkPreviewOptions: true,
+                replyMarkup: new InlineKeyboardMarkup(overrideKeyboard));
             return;
         }
 
@@ -523,7 +559,7 @@ public class CommandHandler(
             return;
         }
 
-        if (campaign.DungeonMasterId != user.Id)
+        if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "⚠️ Только Мастер Подземелий может стереть запись о битве!",
@@ -628,6 +664,31 @@ public class CommandHandler(
         }
 
         var user = await EnsureUser(msg);
+
+        if (IsSuperAdmin(user))
+        {
+            // Super-admin picks who becomes DM
+            var activeUsers = await db.Users
+                .Where(u => u.IsActive)
+                .OrderBy(u => u.Name)
+                .ToListAsync();
+
+            if (activeUsers.Count == 0)
+            {
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: "⚠️ Нет активных пользователей для назначения Мастером.",
+                    parseMode: ParseMode.Html);
+                return;
+            }
+
+            var keyboard = keyboardGenerator.GenerateDmPickerKeyboard(activeUsers, user.Id);
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "🧙 Выбери Мастера Подземелий для новой кампании:",
+                parseMode: ParseMode.Html,
+                replyMarkup: new InlineKeyboardMarkup(keyboard));
+            return;
+        }
+
         var (campaign, error) = await campaignManager.CreateCampaign(
             msg.Chat.Id, msg.MessageThreadId.Value, user.Id);
 
@@ -738,48 +799,104 @@ public class CommandHandler(
             replyMarkup: new InlineKeyboardMarkup(keyboard));
     }
 
-    private async Task HandleCampaignPauseCommand(Message msg)
+    private async Task HandleCampaignNextCommand(Message msg)
     {
         var user = await EnsureUser(msg);
+        var chatId = msg.Chat.Id;
 
-        // If in a campaign thread, pause that campaign directly (DM-only)
-        if (msg.MessageThreadId is not null)
-        {
-            var campaign = await campaignManager.ResolveCampaignFromContext(
-                msg.Chat.Id, msg.MessageThreadId);
+        // Resolve which campaign currently holds the turn
+        var currentCampaign = await campaignOrderService.GetCurrentCampaign(chatId);
 
-            if (campaign is not null)
-            {
-                var error = await campaignManager.DeleteCampaign(campaign.Id, user.Id);
-                if (error is not null)
-                {
-                    await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                        text: error, parseMode: ParseMode.Html);
-                    return;
-                }
-
-                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                    text: "📕 Кампания приостановлена — летопись запечатана до лучших времён.",
-                    parseMode: ParseMode.Html);
-                return;
-            }
-        }
-
-        // Service thread — show DM's campaigns
-        var campaigns = await campaignManager.GetDmCampaigns(user.Id);
-        if (campaigns.Count == 0)
+        if (currentCampaign is null)
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "⚠️ У тебя нет активных кампаний для приостановки.",
+                text: "⚠️ Очерёдность походов не настроена. Используй /order_set.",
                 parseMode: ParseMode.Html);
             return;
         }
 
-        var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
-            CallbackActions.CampaignPause, campaigns, user.Id);
+        // Only the DM of the current turn-holder (or super-admin) may advance the turn
+        if (currentCampaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ Передать ход может только Мастер текущей кампании в очереди.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        // Peek at the next campaign to show in the confirmation message
+        var ordered = await campaignOrderService.GetOrderedCampaigns(chatId);
+        var currentIndex = ordered.FindIndex(c => c.Id == currentCampaign.Id);
+        Campaign? nextCampaign = null;
+        if (ordered.Count > 0)
+        {
+            nextCampaign = currentIndex < 0 || currentIndex == ordered.Count - 1
+                ? ordered[0]
+                : ordered[currentIndex + 1];
+        }
+
+        var nextName = nextCampaign?.ForumThread.Name ?? "?";
+
+        var keyboard = keyboardGenerator.GenerateCampaignNextConfirmKeyboard(user.Id);
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: $"⚔️ Передать ход кампании <b>{currentCampaign.ForumThread.Name}</b>? Следующей в очереди станет <b>{nextName}</b>.",
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
+    }
+
+    private async Task HandleOrderCommand(Message msg)
+    {
+        var chatId = msg.Chat.Id;
+        var ordered = await campaignOrderService.GetOrderedCampaigns(chatId);
+
+        if (ordered.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "📜 Очерёдность походов не настроена. Используй /order_set.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        var currentCampaign = await campaignOrderService.GetCurrentCampaign(chatId);
+
+        var sb = new StringBuilder("📜 <b>Очерёдность походов:</b>\n\n");
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var c = ordered[i];
+            var isCurrent = currentCampaign?.Id == c.Id;
+            var prefix = isCurrent ? "🎯" : "  ";
+            var dmLabel = string.IsNullOrWhiteSpace(c.DungeonMaster.Username)
+                ? c.DungeonMaster.Name
+                : $"@{c.DungeonMaster.Username}";
+            sb.AppendLine($"{prefix} {i + 1}. {c.ForumThread.Name} (Мастер: {dmLabel})");
+        }
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-            text: "📕 Выбери кампанию для приостановки:",
+            text: sb.ToString(), parseMode: ParseMode.Html);
+    }
+
+    private async Task HandleOrderSetCommand(Message msg)
+    {
+        var user = await EnsureUser(msg);
+        var chatId = msg.Chat.Id;
+
+        var allCampaigns = await campaignManager.GetActiveCampaigns(chatId);
+        if (allCampaigns.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ В этом чате нет активных кампаний.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        // Initialise draft from the current saved order
+        var ordered = await campaignOrderService.GetOrderedCampaigns(chatId);
+        var initialDraft = ordered.Select(c => c.Id).ToList();
+        await campaignOrderService.SaveDraft(user.Id, chatId, initialDraft);
+
+        var keyboard = keyboardGenerator.GenerateOrderSetKeyboard(allCampaigns, initialDraft, user.Id);
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: "⚙️ Настрой очерёдность кампаний. Нажимай на кампании, чтобы выстроить порядок:",
             parseMode: ParseMode.Html,
             replyMarkup: new InlineKeyboardMarkup(keyboard));
     }
@@ -875,6 +992,12 @@ public class CommandHandler(
 
         await ticker.DeleteBatchAsync(jobIds);
     }
+
+    /// <summary>
+    /// Returns true if the user is the designated super-admin who may act on behalf of any DM.
+    /// </summary>
+    private static bool IsSuperAdmin(User user) =>
+        string.Equals(user.Username, BotConstants.SuperAdminUsername, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Ensures the user exists in the database. Creates if not found.

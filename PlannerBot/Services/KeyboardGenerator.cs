@@ -295,4 +295,115 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
         return buttons.ToArray();
     }
+
+    /// <summary>
+    /// Generates a confirmation keyboard for /campaign_next.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateCampaignNextConfirmKeyboard(long userId)
+    {
+        return
+        [
+            [
+                InlineKeyboardButton.WithCallbackData(
+                    "✅ Передать ход",
+                    $"{CallbackActions.CampaignNext};{userId}"),
+                InlineKeyboardButton.WithCallbackData(
+                    "❌ Отмена",
+                    $"{CallbackActions.Dismiss};{userId}")
+            ]
+        ];
+    }
+
+    /// <summary>
+    /// Generates a warning keyboard shown when a DM tries to /vote out of turn.
+    /// <paramref name="slotStr"/> is either an empty string (no-args path → show slot picker after override)
+    /// or a compact datetime string (yyMMddHHmm) for the direct-datetime path.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateOrderOverrideKeyboard(int campaignId, string slotStr, long userId)
+    {
+        return
+        [
+            [
+                InlineKeyboardButton.WithCallbackData(
+                    "⚔️ Продолжить",
+                    $"{CallbackActions.OrderOverride};{campaignId};{slotStr};{userId}"),
+                InlineKeyboardButton.WithCallbackData(
+                    "❌ Отмена",
+                    $"{CallbackActions.OrderCancel};{userId}")
+            ]
+        ];
+    }
+
+    /// <summary>
+    /// Generates the /order_set interactive keyboard.
+    /// Each campaign button shows the campaign's current position in the draft (1-based) or "—" if not assigned.
+    /// The bottom row has Reset, Cancel, and Save buttons.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateOrderSetKeyboard(
+        IReadOnlyList<Campaign> allCampaigns, List<int> draftOrder, long userId)
+    {
+        var buttons = allCampaigns
+            .Select(c =>
+            {
+                var pos = draftOrder.IndexOf(c.Id);
+                var label = pos >= 0
+                    ? $"{pos + 1}. ⚔️ {c.ForumThread.Name}"
+                    : $"— ⚔️ {c.ForumThread.Name}";
+                return new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        label,
+                        $"{CallbackActions.OrderSetToggle};{c.Id};{userId}")
+                };
+            })
+            .ToList();
+
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "🔄 Сброс",
+                $"{CallbackActions.OrderSetReset};{userId}"),
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Отмена",
+                $"{CallbackActions.OrderSetCancel};{userId}"),
+            InlineKeyboardButton.WithCallbackData(
+                "💾 Сохранить",
+                $"{CallbackActions.OrderSetSave};{userId}")
+        ]);
+
+        return buttons.ToArray();
+    }
+
+    /// <summary>
+    /// Generates a DM picker keyboard for the /campaign_new super-admin flow.
+    /// Lists all active users and lets the super-admin pick who becomes the DM.
+    /// Each button embeds the target user's DB ID and the callback owner's DB ID.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateDmPickerKeyboard(
+        IReadOnlyList<User> users, long callbackOwnerId)
+    {
+        var buttons = users
+            .Select(u =>
+            {
+                var label = string.IsNullOrWhiteSpace(u.Username)
+                    ? u.Name
+                    : $"@{u.Username}";
+                return new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        label,
+                        $"{CallbackActions.CampaignNewDmPick};{u.Id};{callbackOwnerId}")
+                };
+            })
+            .ToList();
+
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Отмена",
+                $"{CallbackActions.Dismiss};{callbackOwnerId}")
+        ]);
+
+        return buttons.ToArray();
+    }
 }

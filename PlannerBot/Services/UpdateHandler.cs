@@ -27,6 +27,7 @@ public partial class UpdateHandler(
     SlotCalculator slotCalculator,
     ForumThreadTracker forumThreadTracker,
     CampaignManager campaignManager,
+    CampaignOrderService campaignOrderService,
     AppDbContext db) : IUpdateHandler
 {
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
@@ -321,20 +322,46 @@ public partial class UpdateHandler(
 
                     break;
                 }
-            case CallbackActions.CampaignPause:
+            case CallbackActions.CampaignNext:
                 {
-                    var campaignId = int.Parse(split[1]);
-                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
                     if (user is null) return;
 
-                    var deleteError = await campaignManager.DeleteCampaign(campaignId, user.Id);
-                    var deleteResultText = deleteError ?? "📕 Кампания приостановлена — летопись запечатана до лучших времён.";
+                    var chatId = callbackQuery.Message!.Chat.Id;
 
-                    await bot.EditMessageText(
-                        callbackQuery.Message!.Chat.Id,
-                        callbackQuery.Message.Id,
-                        deleteResultText,
+                    // Re-verify the user is still the turn-holder DM
+                    var currentCampaign = await campaignOrderService.GetCurrentCampaign(chatId);
+                    if (currentCampaign is null || (currentCampaign.DungeonMasterId != user.Id && !IsSuperAdmin(user)))
+                    {
+                        await bot.EditMessageText(
+                            chatId,
+                            callbackQuery.Message.Id,
+                            "⚠️ Передать ход может только Мастер текущей кампании.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    var (_, next) = await campaignOrderService.AdvanceTurn(chatId);
+
+                    var resultText = next is not null
+                        ? $"✅ Ход передан! Следующая в очереди — <b>{next.ForumThread.Name}</b>."
+                        : "⚠️ Не удалось определить следующую кампанию.";
+
+                    await bot.EditMessageText(chatId, callbackQuery.Message.Id, resultText,
                         parseMode: ParseMode.Html);
+
+                    // Notify the next campaign's thread
+                    if (next is not null)
+                    {
+                        var dmMention = string.IsNullOrWhiteSpace(next.DungeonMaster.Username)
+                            ? next.DungeonMaster.Name
+                            : $"@{next.DungeonMaster.Username}";
+                        await bot.SendMessage(
+                            next.ForumThread.ChatId,
+                            messageThreadId: next.ForumThread.ThreadId,
+                            text: $"🎲 Наступает ваш ход, {dmMention}! Очередь кампании <b>{next.ForumThread.Name}</b> пришла — самое время объявить дату следующей битвы.",
+                            parseMode: ParseMode.Html);
+                    }
 
                     break;
                 }
@@ -359,7 +386,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
@@ -404,7 +431,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
@@ -478,7 +505,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер может начать голосование!");
@@ -536,7 +563,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (game.Campaign.DungeonMasterId != user.Id)
+                    if (game.Campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер может удалить запись о битве!");
@@ -577,7 +604,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер Подземелий может начать голосование!");
@@ -655,7 +682,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер Подземелий может стереть запись о битве!");
@@ -677,6 +704,207 @@ public partial class UpdateHandler(
                     if (user is null) return;
 
                     await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    break;
+                }
+            case CallbackActions.OrderOverride:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var slotStr = split[2];
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[3]));
+                    if (user is null) return;
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    await bot.DeleteMessage(chatId, callbackQuery.Message.Id);
+
+                    if (string.IsNullOrEmpty(slotStr))
+                    {
+                        // No-args path: show the slot picker
+                        await commandHandler.ShowSlotPickerForCampaign(
+                            chatId,
+                            callbackQuery.Message.MessageThreadId,
+                            campaignId,
+                            user.Id);
+                    }
+                    else
+                    {
+                        // Args path: fire the vote directly (collision check included)
+                        var slotUtc = DateTime.SpecifyKind(
+                            DateTime.ParseExact(slotStr, "yyMMddHHmm", CultureInfo.InvariantCulture),
+                            DateTimeKind.Utc);
+
+                        var campaign = await db.Campaigns
+                            .Include(c => c.ForumThread)
+                            .Include(c => c.Members)
+                            .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+                        if (campaign is null)
+                        {
+                            await bot.SendMessage(chatId,
+                                messageThreadId: callbackQuery.Message.MessageThreadId,
+                                text: "⚠️ Кампания не найдена или более не активна.",
+                                parseMode: ParseMode.Html);
+                            break;
+                        }
+
+                        var memberUserIds = campaign.Members.Select(m => m.UserId).ToList();
+                        var memberUsers = await db.Users
+                            .Where(u => memberUserIds.Contains(u.Id) && u.IsActive)
+                            .ToListAsync();
+
+                        var conflictingCampaigns = await commandHandler.GetConflictingCampaignNames(
+                            campaignId, slotUtc, memberUsers.Select(u => u.Id).ToList());
+
+                        if (conflictingCampaigns.Count > 0)
+                        {
+                            var conflictList = string.Join("\n", conflictingCampaigns.Select(n => $"  — {n}"));
+                            var collisionKeyboard = keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
+                            await bot.SendMessage(chatId,
+                                messageThreadId: callbackQuery.Message.MessageThreadId,
+                                text: $"⚠️ Внимание, Мастер! В этот день уже записаны битвы в других кампаниях:\n\n{conflictList}\n\nНекоторые воины могут быть заняты. Продолжить голосование?",
+                                parseMode: ParseMode.Html,
+                                replyMarkup: new InlineKeyboardMarkup(collisionKeyboard));
+                            break;
+                        }
+
+                        var activeMentions = string.Join(" ", memberUsers
+                            .Where(u => !string.IsNullOrWhiteSpace(u.Username))
+                            .Select(u => $"@{u.Username}"));
+                        await votingManager.SendVotingMessage(
+                            campaign.ForumThread.ChatId,
+                            campaign.ForumThread.ThreadId,
+                            slotUtc,
+                            user.Id,
+                            activeMentions,
+                            keyboardGenerator,
+                            campaignId);
+                    }
+
+                    break;
+                }
+            case CallbackActions.OrderCancel:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    break;
+                }
+            case CallbackActions.OrderSetToggle:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    await campaignOrderService.ToggleDraftCampaign(user.Id, chatId, campaignId);
+
+                    var draft = await campaignOrderService.GetDraft(user.Id, chatId);
+                    var allCampaigns = await campaignManager.GetActiveCampaigns(chatId);
+                    var keyboard = keyboardGenerator.GenerateOrderSetKeyboard(allCampaigns, draft, user.Id);
+
+                    await bot.EditMessageReplyMarkup(chatId, callbackQuery.Message.Id,
+                        new InlineKeyboardMarkup(keyboard));
+                    break;
+                }
+            case CallbackActions.OrderSetReset:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    var ordered = await campaignOrderService.GetOrderedCampaigns(chatId);
+                    var savedOrder = ordered.Select(c => c.Id).ToList();
+                    await campaignOrderService.SaveDraft(user.Id, chatId, savedOrder);
+
+                    var allCampaigns = await campaignManager.GetActiveCampaigns(chatId);
+                    var keyboard = keyboardGenerator.GenerateOrderSetKeyboard(allCampaigns, savedOrder, user.Id);
+
+                    await bot.EditMessageReplyMarkup(chatId, callbackQuery.Message.Id,
+                        new InlineKeyboardMarkup(keyboard));
+                    break;
+                }
+            case CallbackActions.OrderSetCancel:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    await campaignOrderService.DeleteDraft(user.Id, chatId);
+                    await bot.DeleteMessage(chatId, callbackQuery.Message.Id);
+                    break;
+                }
+            case CallbackActions.OrderSetSave:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    var draft = await campaignOrderService.GetDraft(user.Id, chatId);
+                    await campaignOrderService.SetOrder(chatId, draft);
+                    await campaignOrderService.DeleteDraft(user.Id, chatId);
+
+                    var ordered = await campaignOrderService.GetOrderedCampaigns(chatId);
+                    var currentCampaign = await campaignOrderService.GetCurrentCampaign(chatId);
+
+                    var sb = new StringBuilder("✅ Очерёдность сохранена!\n\n📜 <b>Текущий порядок:</b>\n\n");
+                    for (var i = 0; i < ordered.Count; i++)
+                    {
+                        var c = ordered[i];
+                        var isCurrent = currentCampaign?.Id == c.Id;
+                        var prefix = isCurrent ? "🎯" : "  ";
+                        sb.AppendLine($"{prefix} {i + 1}. {c.ForumThread.Name}");
+                    }
+
+                    await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                        sb.ToString(), parseMode: ParseMode.Html);
+                    break;
+                }
+            case CallbackActions.CampaignNewDmPick:
+                {
+                    // Super-admin picked a DM user for a new campaign
+                    var targetUserId = long.Parse(split[1]);
+                    var callbackOwnerId = long.Parse(split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, callbackOwnerId);
+                    if (user is null) return;
+
+                    if (!IsSuperAdmin(user))
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Только старший Архимаг может назначать Мастеров!");
+                        break;
+                    }
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    var threadId = callbackQuery.Message.MessageThreadId;
+
+                    if (threadId is null)
+                    {
+                        await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                            "⚠️ Кампанию можно основать только в потоке форума.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    var (campaign, error) = await campaignManager.CreateCampaign(chatId, threadId.Value, targetUserId);
+
+                    if (error is not null)
+                    {
+                        await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                            error, parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    // Auto-join the assigned DM as a member
+                    await campaignManager.JoinCampaign(campaign!.Id, targetUserId);
+
+                    var dm = await db.Users.FindAsync(targetUserId);
+                    var dmLabel = dm is not null && !string.IsNullOrWhiteSpace(dm.Username)
+                        ? $"@{dm.Username}"
+                        : dm?.Name ?? "?";
+
+                    await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                        $"🏰 Кампания основана! {dmLabel} встаёт за ширму Мастера Подземелий.",
+                        parseMode: ParseMode.Html);
                     break;
                 }
         }
@@ -835,6 +1063,12 @@ public partial class UpdateHandler(
     }
 
     /// <summary>
+    /// Returns true if the user is the designated super-admin who may act on behalf of any DM.
+    /// </summary>
+    private static bool IsSuperAdmin(Data.User user) =>
+        string.Equals(user.Username, BotConstants.SuperAdminUsername, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Validates callback ownership by looking up the user by DB ID and comparing
     /// their username to the callback sender. Returns null if validation fails.
     /// </summary>
@@ -860,4 +1094,3 @@ public partial class UpdateHandler(
         return user;
     }
 }
-

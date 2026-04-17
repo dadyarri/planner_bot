@@ -353,7 +353,7 @@ public partial class UpdateHandler(
                     // Notify the next campaign's thread
                     if (next is not null)
                     {
-                        var dmMention = string.IsNullOrEmpty(next.DungeonMaster.Username)
+                        var dmMention = string.IsNullOrWhiteSpace(next.DungeonMaster.Username)
                             ? next.DungeonMaster.Name
                             : $"@{next.DungeonMaster.Username}";
                         await bot.SendMessage(
@@ -766,7 +766,9 @@ public partial class UpdateHandler(
                             break;
                         }
 
-                        var activeMentions = string.Join(" ", memberUsers.Select(u => $"@{u.Username}"));
+                        var activeMentions = string.Join(" ", memberUsers
+                            .Where(u => !string.IsNullOrWhiteSpace(u.Username))
+                            .Select(u => $"@{u.Username}"));
                         await votingManager.SendVotingMessage(
                             campaign.ForumThread.ChatId,
                             campaign.ForumThread.ThreadId,

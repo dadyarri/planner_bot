@@ -320,7 +320,7 @@ public class CommandHandler(
             {
                 if (campaign is not null)
                 {
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                             text: "⚠️ Только Мастер Подземелий может начать голосование!",
@@ -413,7 +413,7 @@ public class CommandHandler(
         }
 
         // DM-only
-        if (campaign.DungeonMasterId != user.Id)
+        if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "⚠️ Только Мастер Подземелий может начать голосование в этой кампании!",
@@ -559,7 +559,7 @@ public class CommandHandler(
             return;
         }
 
-        if (campaign.DungeonMasterId != user.Id)
+        if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "⚠️ Только Мастер Подземелий может стереть запись о битве!",
@@ -664,6 +664,31 @@ public class CommandHandler(
         }
 
         var user = await EnsureUser(msg);
+
+        if (IsSuperAdmin(user))
+        {
+            // Super-admin picks who becomes DM
+            var activeUsers = await db.Users
+                .Where(u => u.IsActive)
+                .OrderBy(u => u.Name)
+                .ToListAsync();
+
+            if (activeUsers.Count == 0)
+            {
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: "⚠️ Нет активных пользователей для назначения Мастером.",
+                    parseMode: ParseMode.Html);
+                return;
+            }
+
+            var keyboard = keyboardGenerator.GenerateDmPickerKeyboard(activeUsers, user.Id);
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "🧙 Выбери Мастера Подземелий для новой кампании:",
+                parseMode: ParseMode.Html,
+                replyMarkup: new InlineKeyboardMarkup(keyboard));
+            return;
+        }
+
         var (campaign, error) = await campaignManager.CreateCampaign(
             msg.Chat.Id, msg.MessageThreadId.Value, user.Id);
 
@@ -790,8 +815,8 @@ public class CommandHandler(
             return;
         }
 
-        // Only the DM of the current turn-holder may advance the turn
-        if (currentCampaign.DungeonMasterId != user.Id)
+        // Only the DM of the current turn-holder (or super-admin) may advance the turn
+        if (currentCampaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "⚠️ Передать ход может только Мастер текущей кампании в очереди.",
@@ -967,6 +992,12 @@ public class CommandHandler(
 
         await ticker.DeleteBatchAsync(jobIds);
     }
+
+    /// <summary>
+    /// Returns true if the user is the designated super-admin who may act on behalf of any DM.
+    /// </summary>
+    private static bool IsSuperAdmin(User user) =>
+        string.Equals(user.Username, BotConstants.SuperAdminUsername, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Ensures the user exists in the database. Creates if not found.

@@ -78,4 +78,7 @@ public static class CallbackActions
 
     /// <summary>User saved the /order_set draft as the new campaign order.</summary>
     public const string OrderSetSave = "oss";
+
+    /// <summary>Super-admin picked a DM from the user list during /campaign_new.</summary>
+    public const string CampaignNewDmPick = "cndp";
 }

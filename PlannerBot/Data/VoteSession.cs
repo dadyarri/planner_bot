@@ -39,7 +39,7 @@ public class VoteSession
     public VoteOutcome Outcome { get; set; } = VoteOutcome.Pending;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ExpiresAt { get; set; }
-    public User Creator { get; set; }
+    public User Creator { get; set; } = null!;
     public long CreatorId { get; set; }
     public int CampaignId { get; set; }
     public Campaign Campaign { get; set; } = null!;

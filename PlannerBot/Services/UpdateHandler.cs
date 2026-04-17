@@ -331,7 +331,7 @@ public partial class UpdateHandler(
 
                     // Re-verify the user is still the turn-holder DM
                     var currentCampaign = await campaignOrderService.GetCurrentCampaign(chatId);
-                    if (currentCampaign is null || currentCampaign.DungeonMasterId != user.Id)
+                    if (currentCampaign is null || (currentCampaign.DungeonMasterId != user.Id && !IsSuperAdmin(user)))
                     {
                         await bot.EditMessageText(
                             chatId,
@@ -386,7 +386,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
@@ -431,7 +431,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
@@ -505,7 +505,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер может начать голосование!");
@@ -563,7 +563,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (game.Campaign.DungeonMasterId != user.Id)
+                    if (game.Campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер может удалить запись о битве!");
@@ -604,7 +604,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер Подземелий может начать голосование!");
@@ -682,7 +682,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id)
+                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер Подземелий может стереть запись о битве!");
@@ -859,6 +859,54 @@ public partial class UpdateHandler(
                         sb.ToString(), parseMode: ParseMode.Html);
                     break;
                 }
+            case CallbackActions.CampaignNewDmPick:
+                {
+                    // Super-admin picked a DM user for a new campaign
+                    var targetUserId = long.Parse(split[1]);
+                    var callbackOwnerId = long.Parse(split[2]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, callbackOwnerId);
+                    if (user is null) return;
+
+                    if (!IsSuperAdmin(user))
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Только старший Архимаг может назначать Мастеров!");
+                        break;
+                    }
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    var threadId = callbackQuery.Message.MessageThreadId;
+
+                    if (threadId is null)
+                    {
+                        await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                            "⚠️ Кампанию можно основать только в потоке форума.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    var (campaign, error) = await campaignManager.CreateCampaign(chatId, threadId.Value, targetUserId);
+
+                    if (error is not null)
+                    {
+                        await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                            error, parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    // Auto-join the assigned DM as a member
+                    await campaignManager.JoinCampaign(campaign!.Id, targetUserId);
+
+                    var dm = await db.Users.FindAsync(targetUserId);
+                    var dmLabel = dm is not null && !string.IsNullOrWhiteSpace(dm.Username)
+                        ? $"@{dm.Username}"
+                        : dm?.Name ?? "?";
+
+                    await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                        $"🏰 Кампания основана! {dmLabel} встаёт за ширму Мастера Подземелий.",
+                        parseMode: ParseMode.Html);
+                    break;
+                }
         }
 
         await bot.AnswerCallbackQuery(callbackQuery.Id);
@@ -1015,6 +1063,12 @@ public partial class UpdateHandler(
     }
 
     /// <summary>
+    /// Returns true if the user is the designated super-admin who may act on behalf of any DM.
+    /// </summary>
+    private static bool IsSuperAdmin(Data.User user) =>
+        string.Equals(user.Username, BotConstants.SuperAdminUsername, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Validates callback ownership by looking up the user by DB ID and comparing
     /// their username to the callback sender. Returns null if validation fails.
     /// </summary>
@@ -1040,4 +1094,3 @@ public partial class UpdateHandler(
         return user;
     }
 }
-

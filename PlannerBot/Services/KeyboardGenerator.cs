@@ -373,4 +373,37 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
 
         return buttons.ToArray();
     }
+
+    /// <summary>
+    /// Generates a DM picker keyboard for the /campaign_new super-admin flow.
+    /// Lists all active users and lets the super-admin pick who becomes the DM.
+    /// Each button embeds the target user's DB ID and the callback owner's DB ID.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateDmPickerKeyboard(
+        IReadOnlyList<User> users, long callbackOwnerId)
+    {
+        var buttons = users
+            .Select(u =>
+            {
+                var label = string.IsNullOrWhiteSpace(u.Username)
+                    ? u.Name
+                    : $"@{u.Username}";
+                return new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        label,
+                        $"{CallbackActions.CampaignNewDmPick};{u.Id};{callbackOwnerId}")
+                };
+            })
+            .ToList();
+
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Отмена",
+                $"{CallbackActions.Dismiss};{callbackOwnerId}")
+        ]);
+
+        return buttons.ToArray();
+    }
 }

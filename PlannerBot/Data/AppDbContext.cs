@@ -17,6 +17,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<CampaignMember> CampaignMembers { get; set; }
     public DbSet<ServiceThread> ServiceThreads { get; set; }
     public DbSet<AvailableSlot> AvailableSlots { get; set; }
+    public DbSet<CampaignOrderState> CampaignOrderStates { get; set; }
+    public DbSet<CampaignOrderDraft> CampaignOrderDrafts { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -39,6 +41,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         modelBuilder.Entity<ServiceThread>()
             .HasIndex(st => st.ForumThreadId)
+            .IsUnique();
+
+        modelBuilder.Entity<CampaignOrderState>()
+            .HasIndex(s => s.ChatId)
+            .IsUnique();
+
+        modelBuilder.Entity<CampaignOrderDraft>()
+            .HasIndex(d => new { d.UserId, d.ChatId })
             .IsUnique();
 
         modelBuilder.ApplyConfiguration(new TimeTickerConfigurations<TimeTickerEntity>());

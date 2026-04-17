@@ -13,6 +13,7 @@ public class Campaign
     public int ForumThreadId { get; set; }
     public ForumThread ForumThread { get; set; } = null!;
     public bool IsActive { get; set; } = true;
+    public int? OrderIndex { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public List<CampaignMember> Members { get; set; } = [];
 }

@@ -8,6 +8,7 @@ using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using User = PlannerBot.Data.User;
 
 namespace PlannerBot.Services;
 
@@ -192,72 +193,49 @@ public partial class UpdateHandler(
                     await availabilityManager.SetUnavailableForUnmarkedDays(callbackQuery.From.Username);
 
                     // Compute per-campaign free slots
-                    var slotsPerCampaign = await slotCalculator.GetAvailableSlotsForAllCampaigns();
+                    var (campaign, slots) = await slotCalculator.GetAvailableSlotsForCurrentCampaign();
+
+                    if (campaign is null)
+                    {
+                        break;
+                    }
 
                     // Cache results — full replacement per campaign
                     var computedAt = DateTime.UtcNow;
-                    foreach (var (campaign, slots) in slotsPerCampaign)
-                    {
-                        // Delete old cached slots for this campaign
-                        await db.AvailableSlots
-                            .Where(s => s.CampaignId == campaign.Id)
-                            .ExecuteDeleteAsync();
+                    // Delete old cached slots for this campaign
+                    await db.AvailableSlots
+                        .Where(s => s.CampaignId == campaign.Id)
+                        .ExecuteDeleteAsync();
 
-                        // Insert new slots
-                        foreach (var slot in slots)
+                    // Insert new slots
+                    foreach (var slot in slots)
+                    {
+                        await db.AvailableSlots.AddAsync(new AvailableSlot
                         {
-                            await db.AvailableSlots.AddAsync(new AvailableSlot
-                            {
-                                CampaignId = campaign.Id,
-                                DateTime = slot,
-                                ComputedAt = computedAt
-                            });
-                        }
-                    }
-
-                    // Also clear cached slots for campaigns that no longer have any available slots
-                    var campaignIdsWithSlots = slotsPerCampaign.Keys.Select(c => c.Id).ToHashSet();
-                    var activeCampaignIds = await db.Campaigns
-                        .Where(c => c.IsActive)
-                        .Select(c => c.Id)
-                        .ToListAsync();
-                    foreach (var cid in activeCampaignIds.Where(id => !campaignIdsWithSlots.Contains(id)))
-                    {
-                        await db.AvailableSlots
-                            .Where(s => s.CampaignId == cid)
-                            .ExecuteDeleteAsync();
+                            CampaignId = campaign.Id,
+                            DateTime = slot,
+                            ComputedAt = computedAt
+                        });
                     }
 
                     await db.SaveChangesAsync();
 
                     // Send summary message
-                    if (slotsPerCampaign.Count > 0)
+                    if (slots.Count > 0)
                     {
                         var sb = new StringBuilder();
-                        sb.AppendLine("📜 <b>Свободные слоты по кампаниям:</b>");
+                        sb.AppendLine($"📜 <b>Свободные слоты по текущей кампании {campaign.ForumThread.Name}:</b>");
                         sb.AppendLine();
 
-                        foreach (var (campaign, slots) in slotsPerCampaign)
-                        {
-                            var slotDescriptions = slots
-                                .Select(s => timeZoneUtilities.ConvertToMoscow(s))
-                                .Select(m => timeZoneUtilities.FormatDateTime(m));
-                            sb.AppendLine(
-                                $"<b>{campaign.ForumThread.Name}:</b> {string.Join(", ", slotDescriptions)}");
-                        }
+                        var slotDescriptions = slots
+                            .Select(timeZoneUtilities.ConvertToMoscow)
+                            .Select(timeZoneUtilities.FormatDateTime);
+                        sb.AppendLine(string.Join(", ", slotDescriptions));
 
                         await bot.SendMessage(
                             callbackQuery.Message!.Chat.Id,
                             messageThreadId: callbackQuery.Message.MessageThreadId,
                             text: sb.ToString(),
-                            parseMode: ParseMode.Html);
-                    }
-                    else
-                    {
-                        await bot.SendMessage(
-                            callbackQuery.Message!.Chat.Id,
-                            messageThreadId: callbackQuery.Message.MessageThreadId,
-                            text: "📜 Свободных слотов пока нет — не все герои объявили о своей доступности.",
                             parseMode: ParseMode.Html);
                     }
 
@@ -359,7 +337,8 @@ public partial class UpdateHandler(
                         await bot.SendMessage(
                             next.ForumThread.ChatId,
                             messageThreadId: next.ForumThread.ThreadId,
-                            text: $"🎲 Наступает ваш ход, {dmMention}! Очередь кампании <b>{next.ForumThread.Name}</b> пришла — самое время объявить дату следующей битвы.",
+                            text:
+                            $"🎲 Наступает ваш ход, {dmMention}! Очередь кампании <b>{next.ForumThread.Name}</b> пришла — самое время объявить дату следующей битвы.",
                             parseMode: ParseMode.Html);
                     }
 
@@ -454,7 +433,8 @@ public partial class UpdateHandler(
                     if (conflictingCampaigns.Count > 0)
                     {
                         var conflictList = string.Join("\n", conflictingCampaigns.Select(n => $"  — {n}"));
-                        var collisionKeyboard = keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
+                        var collisionKeyboard =
+                            keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
                             callbackQuery.Message.Id,
@@ -624,7 +604,8 @@ public partial class UpdateHandler(
                     if (conflictingCampaigns.Count > 0)
                     {
                         var conflictList = string.Join("\n", conflictingCampaigns.Select(n => $"  — {n}"));
-                        var collisionKeyboard = keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
+                        var collisionKeyboard =
+                            keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
                             callbackQuery.Message.Id,
@@ -757,10 +738,12 @@ public partial class UpdateHandler(
                         if (conflictingCampaigns.Count > 0)
                         {
                             var conflictList = string.Join("\n", conflictingCampaigns.Select(n => $"  — {n}"));
-                            var collisionKeyboard = keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
+                            var collisionKeyboard =
+                                keyboardGenerator.GenerateVoteCollisionKeyboard(campaignId, slotUtc, user.Id);
                             await bot.SendMessage(chatId,
                                 messageThreadId: callbackQuery.Message.MessageThreadId,
-                                text: $"⚠️ Внимание, Мастер! В этот день уже записаны битвы в других кампаниях:\n\n{conflictList}\n\nНекоторые воины могут быть заняты. Продолжить голосование?",
+                                text:
+                                $"⚠️ Внимание, Мастер! В этот день уже записаны битвы в других кампаниях:\n\n{conflictList}\n\nНекоторые воины могут быть заняты. Продолжить голосование?",
                                 parseMode: ParseMode.Html,
                                 replyMarkup: new InlineKeyboardMarkup(collisionKeyboard));
                             break;
@@ -1065,14 +1048,14 @@ public partial class UpdateHandler(
     /// <summary>
     /// Returns true if the user is the designated super-admin who may act on behalf of any DM.
     /// </summary>
-    private static bool IsSuperAdmin(Data.User user) =>
+    private static bool IsSuperAdmin(User user) =>
         string.Equals(user.Username, BotConstants.SuperAdminUsername, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Validates callback ownership by looking up the user by DB ID and comparing
     /// their username to the callback sender. Returns null if validation fails.
     /// </summary>
-    private async Task<Data.User?> ValidateCallbackOwnerAndResolveUser(
+    private async Task<User?> ValidateCallbackOwnerAndResolveUser(
         CallbackQuery callbackQuery, long userId)
     {
         var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId);

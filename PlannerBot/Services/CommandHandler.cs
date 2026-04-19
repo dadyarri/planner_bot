@@ -874,11 +874,11 @@ public class CommandHandler(
         {
             var c = ordered[i];
             var isCurrent = currentCampaign?.Id == c.Id;
-            var prefix = isCurrent ? "🎯" : "  ";
+            var suffix = isCurrent ? " 🎯" : string.Empty;
             var dmLabel = string.IsNullOrWhiteSpace(c.DungeonMaster.Username)
                 ? c.DungeonMaster.Name
                 : $"@{c.DungeonMaster.Username}";
-            sb.AppendLine($"{prefix} {i + 1}. {c.ForumThread.Name} (Мастер: {dmLabel})");
+            sb.AppendLine($"{i + 1}. {c.ForumThread.Name} (Мастер: {dmLabel}){suffix}");
         }
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,

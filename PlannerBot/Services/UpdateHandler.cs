@@ -834,8 +834,8 @@ public partial class UpdateHandler(
                     {
                         var c = ordered[i];
                         var isCurrent = currentCampaign?.Id == c.Id;
-                        var prefix = isCurrent ? "🎯" : "  ";
-                        sb.AppendLine($"{prefix} {i + 1}. {c.ForumThread.Name}");
+                        var suffix = isCurrent ? " 🎯" : string.Empty;
+                        sb.AppendLine($"{i + 1}. {c.ForumThread.Name}{suffix}");
                     }
 
                     await bot.EditMessageText(chatId, callbackQuery.Message.Id,

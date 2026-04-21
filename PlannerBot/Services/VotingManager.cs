@@ -16,36 +16,20 @@ namespace PlannerBot.Services;
 /// Manages voting sessions for game scheduling.
 /// Handles vote creation, tracking, deduplication, and outcome evaluation.
 /// </summary>
-public class VotingManager
+public class VotingManager(
+    AppDbContext db,
+    ITelegramBotClient bot,
+    ITimeTickerManager<TimeTickerEntity> ticker,
+    TimeZoneUtilities timeZoneUtilities)
 {
-    private readonly AppDbContext _db;
-    private readonly ITelegramBotClient _bot;
-    private readonly ITimeTickerManager<TimeTickerEntity> _ticker;
-    private readonly TimeZoneUtilities _timeZoneUtilities;
-    private readonly ILogger<VotingManager> _logger;
-
     private static readonly TimeSpan VoteSessionTtl = TimeSpan.FromHours(24);
     private static readonly TimeSpan VoteReminderDelay = TimeSpan.FromHours(12);
-
-    public VotingManager(
-        AppDbContext db,
-        ITelegramBotClient bot,
-        ITimeTickerManager<TimeTickerEntity> ticker,
-        TimeZoneUtilities timeZoneUtilities,
-        ILogger<VotingManager> logger)
-    {
-        _db = db;
-        _bot = bot;
-        _ticker = ticker;
-        _timeZoneUtilities = timeZoneUtilities;
-        _logger = logger;
-    }
 
     /// <summary>
     /// Creates a voting session for a specific game datetime.
     /// Schedules expiry and reminder jobs. Returns the stored voting session.
     /// </summary>
-    public async Task<VoteSession?> CreateVotingSession(DateTime gameDateTime, Message message,
+    private async Task<VoteSession?> CreateVotingSession(DateTime gameDateTime, Message message,
         long creatorId, int campaignId)
     {
         var expiresAt = DateTime.UtcNow.Add(VoteSessionTtl);
@@ -63,11 +47,11 @@ public class VotingManager
             CampaignId = campaignId
         };
 
-        await _db.VoteSessions.AddAsync(voteSession);
-        await _db.SaveChangesAsync();
+        await db.VoteSessions.AddAsync(voteSession);
+        await db.SaveChangesAsync();
 
         // Schedule expiry job
-        await _ticker.AddAsync(new TimeTickerEntity
+        await ticker.AddAsync(new TimeTickerEntity
         {
             Function = "expire_vote_session",
             ExecutionTime = expiresAt,
@@ -84,7 +68,7 @@ public class VotingManager
         var reminderTime = DateTime.UtcNow.Add(VoteReminderDelay);
         if (reminderTime < expiresAt)
         {
-            await _ticker.AddAsync(new TimeTickerEntity
+            await ticker.AddAsync(new TimeTickerEntity
             {
                 Function = "send_vote_reminder",
                 ExecutionTime = reminderTime,
@@ -107,35 +91,21 @@ public class VotingManager
     public async Task<VoteOutcome> RecordVoteAndCheckOutcome(long votingSessionId, long userId, VoteType voteType)
     {
         // Check for duplicate vote
-        var existingVote = await _db.VoteSessionVotes
+        var existingVote = await db.VoteSessionVotes
             .AnyAsync(v => v.VoteSessionId == votingSessionId && v.UserId == userId);
 
         if (existingVote)
             return VoteOutcome.Pending;
 
         // Record the vote and persist it
-        await _db.VoteSessionVotes.AddAsync(new VoteSessionVote
+        await db.VoteSessionVotes.AddAsync(new VoteSessionVote
         {
             VoteSessionId = votingSessionId,
             UserId = userId,
             Type = voteType,
             VotedAt = DateTime.UtcNow
         });
-        await _db.SaveChangesAsync();
-
-        // Atomically increment the appropriate counter
-        if (voteType == VoteType.For)
-        {
-            await _db.VoteSessions
-                .Where(vs => vs.Id == votingSessionId)
-                .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount + 1));
-        }
-        else
-        {
-            await _db.VoteSessions
-                .Where(vs => vs.Id == votingSessionId)
-                .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.AgainstCount, vs => vs.AgainstCount + 1));
-        }
+        await db.SaveChangesAsync();
 
         return await EvaluateVoteOutcome(votingSessionId);
     }
@@ -145,25 +115,25 @@ public class VotingManager
     /// </summary>
     public async Task RemoveVote(long votingSessionId, long userId, VoteType voteType)
     {
-        var vote = await _db.VoteSessionVotes
+        var vote = await db.VoteSessionVotes
             .FirstOrDefaultAsync(v => v.VoteSessionId == votingSessionId && v.UserId == userId && v.Type == voteType);
 
         if (vote is null)
             return;
 
-        _db.VoteSessionVotes.Remove(vote);
-        await _db.SaveChangesAsync();
+        db.VoteSessionVotes.Remove(vote);
+        await db.SaveChangesAsync();
 
         // Atomically decrement the appropriate counter
         if (voteType == VoteType.For)
         {
-            await _db.VoteSessions
+            await db.VoteSessions
                 .Where(vs => vs.Id == votingSessionId && vs.VoteCount > 0)
                 .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount - 1));
         }
         else
         {
-            await _db.VoteSessions
+            await db.VoteSessions
                 .Where(vs => vs.Id == votingSessionId && vs.AgainstCount > 0)
                 .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.AgainstCount, vs => vs.AgainstCount - 1));
         }
@@ -182,13 +152,13 @@ public class VotingManager
     /// </summary>
     private async Task<VoteOutcome> EvaluateVoteOutcome(long votingSessionId)
     {
-        var session = await _db.VoteSessions
+        var session = await db.VoteSessions
             .AsNoTracking()
             .FirstOrDefaultAsync(vs => vs.Id == votingSessionId);
         if (session is null)
             return VoteOutcome.Pending;
 
-        var activeUsersCount = await _db.CampaignMembers
+        var activeUsersCount = await db.CampaignMembers
             .Where(cm => cm.CampaignId == session.CampaignId && cm.User.IsActive)
             .CountAsync();
 
@@ -211,7 +181,7 @@ public class VotingManager
     /// </summary>
     public async Task<VoteSession?> GetVotingSession(long votingSessionId)
     {
-        return await _db.VoteSessions
+        return await db.VoteSessions
             .Include(vs => vs.Votes)
             .ThenInclude(v => v.User)
             .FirstOrDefaultAsync(vm => vm.Id == votingSessionId);
@@ -220,15 +190,17 @@ public class VotingManager
     /// <summary>
     /// Gets voter display info for a voting session, grouped by vote type.
     /// </summary>
-    public async Task<(List<string> ForVoters, List<string> AgainstVoters)> GetVoterInfo(long votingSessionId)
+    private async
+        Task<(List<(string Name, string Username)> ForVoters, List<(string Name, string Username)> AgainstVoters)>
+        GetVoterInfo(long votingSessionId)
     {
-        var votes = await _db.VoteSessionVotes
+        var votes = await db.VoteSessionVotes
             .Where(v => v.VoteSessionId == votingSessionId)
-            .Select(v => new { v.User.Username, v.Type })
+            .Select(v => new { v.User.Name, v.User.Username, v.Type })
             .ToListAsync();
 
-        var forVoters = votes.Where(v => v.Type == VoteType.For).Select(v => v.Username).ToList();
-        var againstVoters = votes.Where(v => v.Type == VoteType.Against).Select(v => v.Username).ToList();
+        var forVoters = votes.Where(v => v.Type == VoteType.For).Select(v => (v.Name, v.Username)).ToList();
+        var againstVoters = votes.Where(v => v.Type == VoteType.Against).Select(v => (v.Name, v.Username)).ToList();
 
         return (forVoters, againstVoters);
     }
@@ -239,31 +211,46 @@ public class VotingManager
     /// </summary>
     public async Task<string> BuildVotingMessageText(VoteSession session)
     {
-        var moscowGameDateTime = _timeZoneUtilities.ConvertToMoscow(session.GameDateTime);
-        var activeUsersCount = await _db.CampaignMembers
+        var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(session.GameDateTime);
+        var activeUsers = await db.CampaignMembers
+            .Include(cm => cm.User)
             .Where(cm => cm.CampaignId == session.CampaignId && cm.User.IsActive)
-            .CountAsync();
+            .ToListAsync();
         var (forVoters, againstVoters) = await GetVoterInfo(session.Id);
 
         var sb = new StringBuilder();
         sb.AppendLine(
-            $"⚔️ Совет братства решает! {_timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{_timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>");
+            $"⚔️ Совет братства решает! {timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>");
         sb.AppendLine();
-        sb.AppendLine($"👍 За: {session.VoteCount}/{activeUsersCount}");
+        sb.AppendLine($"👍 За: {forVoters.Count}/{activeUsers.Count}");
 
         if (forVoters.Count > 0)
-            sb.AppendLine($"  └ {string.Join(", ", forVoters.Select(u => $"@{u}"))}");
+            sb.AppendLine($"  └ {string.Join(", ", forVoters)}");
 
         if (session.AgainstCount > 0 || againstVoters.Count > 0)
         {
-            sb.AppendLine($"👎 Против: {session.AgainstCount}");
+            sb.AppendLine($"👎 Против: {againstVoters.Count}");
             if (againstVoters.Count > 0)
-                sb.AppendLine($"  └ {string.Join(", ", againstVoters.Select(u => $"@{u}"))}");
+                sb.AppendLine($"  └ {string.Join(", ", againstVoters)}");
         }
 
         sb.AppendLine();
         sb.AppendLine("👍 — Поддержать запись битвы в летописи");
         sb.AppendLine("👎 — Отклонить этот час");
+
+        var excluded = new HashSet<string>(forVoters.Select(v => v.Username));
+        excluded.UnionWith(againstVoters.Select(v => v.Username));
+
+        var leftUsers = activeUsers
+            .Where(u => !excluded.Contains(u.User.Username))
+            .ToList();
+
+        if (leftUsers.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine(
+                $"Совет ждёт ваших голосов: {string.Join(", ", leftUsers.Select(u => $"@{u.User.Username}"))}!");
+        }
 
         return sb.ToString();
     }
@@ -274,7 +261,7 @@ public class VotingManager
     /// </summary>
     public async Task CloseVotingSession(long votingSessionId, VoteOutcome outcome)
     {
-        await _db.VoteSessions
+        await db.VoteSessions
             .Where(vs => vs.Id == votingSessionId)
             .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.Outcome, outcome));
     }
@@ -292,12 +279,12 @@ public class VotingManager
         KeyboardGenerator keyboard,
         int campaignId)
     {
-        var creator = await _db.Users.FirstAsync(u => u.Id == creatorUserId);
-        var moscowGameDateTime = _timeZoneUtilities.ConvertToMoscow(utcGameDateTime);
-        var sentMessage = await _bot.SendMessage(chatId,
+        var creator = await db.Users.FirstAsync(u => u.Id == creatorUserId);
+        var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(utcGameDateTime);
+        var sentMessage = await bot.SendMessage(chatId,
             messageThreadId: threadId,
             text:
-            $"⚔️ Совет братства решает! {_timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{_timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 — Поддержать запись битвы в летописи\n👎 — Отклонить этот час\n\n{activeMentions}",
+            $"⚔️ Совет братства решает! {timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>\n\n👍 — Поддержать запись битвы в летописи\n👎 — Отклонить этот час\n\n{activeMentions}",
             parseMode: ParseMode.Html, linkPreviewOptions: true,
             replyMarkup: new InlineKeyboardMarkup(keyboard.GenerateVoteCancelKeyboard(creatorUserId)));
 
@@ -305,9 +292,9 @@ public class VotingManager
         if (votingSession is not null)
         {
             votingSession.MessageId = sentMessage.MessageId;
-            await _db.SaveChangesAsync();
+            await db.SaveChangesAsync();
 
-            await _bot.SetMessageReaction(
+            await bot.SetMessageReaction(
                 chatId,
                 sentMessage.MessageId,
                 [new ReactionTypeEmoji { Emoji = "👍" }]);
@@ -319,11 +306,11 @@ public class VotingManager
     /// </summary>
     public async Task DeleteVotingSession(long votingSessionId)
     {
-        await _db.VoteSessionVotes
+        await db.VoteSessionVotes
             .Where(v => v.VoteSessionId == votingSessionId)
             .ExecuteDeleteAsync();
 
-        await _db.VoteSessions
+        await db.VoteSessions
             .Where(vs => vs.Id == votingSessionId)
             .ExecuteDeleteAsync();
     }

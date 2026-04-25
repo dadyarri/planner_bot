@@ -161,6 +161,46 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     }
 
     /// <summary>
+    /// Generates a pager keyboard for the /get schedule view.
+    /// Shows 3 days per page across the 12-day window and a close button to remove the message.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateGetScheduleKeyboard(int page, int totalPages, long userId)
+    {
+        var navigationButtons = new List<InlineKeyboardButton>();
+
+        if (page > 0)
+        {
+            navigationButtons.Add(
+                InlineKeyboardButton.WithCallbackData(
+                    "⬅️ Назад",
+                    $"{CallbackActions.GetPage};{page - 1};{userId}")
+            );
+        }
+
+        if (page < totalPages - 1)
+        {
+            navigationButtons.Add(
+                InlineKeyboardButton.WithCallbackData(
+                    "Вперёд ➡️",
+                    $"{CallbackActions.GetPage};{page + 1};{userId}")
+            );
+        }
+
+        var buttons = new List<InlineKeyboardButton[]>();
+        if (navigationButtons.Count > 0)
+            buttons.Add(navigationButtons.ToArray());
+
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Закрыть",
+                $"{CallbackActions.Dismiss};{userId}")
+        ]);
+
+        return buttons.ToArray();
+    }
+
+    /// <summary>
     /// Generates a campaign picker keyboard for /vote in a service thread.
     /// Embeds the target slot UTC datetime (compact format) so the callback can fire the vote directly.
     /// </summary>

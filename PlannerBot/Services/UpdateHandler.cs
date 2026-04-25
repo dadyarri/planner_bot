@@ -241,6 +241,20 @@ public partial class UpdateHandler(
 
                     break;
                 }
+            case CallbackActions.GetPage:
+                {
+                    var page = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    await commandHandler.SendSchedulePage(
+                        callbackQuery.Message!.Chat.Id,
+                        callbackQuery.Message.MessageThreadId,
+                        user.Id,
+                        page,
+                        callbackQuery.Message.Id);
+                    break;
+                }
             case CallbackActions.VoteCancel:
                 {
                     var creatorUserId = long.Parse(split[1]);

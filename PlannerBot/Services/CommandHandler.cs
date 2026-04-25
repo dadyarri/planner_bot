@@ -187,29 +187,62 @@ public class CommandHandler(
 
     private async Task HandleGetCommand(Message msg)
     {
+        var user = await db.Users
+            .FirstOrDefaultAsync(u => u.Username == msg.From!.Username);
+
+        if (user is null)
+        {
+            user = new User
+            {
+                Username = msg.From!.Username ?? throw new UnreachableException(),
+                Name = $"{msg.From!.FirstName} {msg.From!.LastName}".Trim(),
+                IsActive = true
+            };
+            await db.Users.AddAsync(user);
+            await db.SaveChangesAsync();
+        }
+
+        await SendSchedulePage(msg.Chat.Id, msg.MessageThreadId, user.Id, 0);
+    }
+
+    internal async Task SendSchedulePage(long chatId, int? messageThreadId, long userId, int page, int? editMessageId = null)
+    {
+        const int totalDays = 12;
+        const int daysPerPage = 3;
+        var totalPages = totalDays / daysPerPage;
+        page = Math.Clamp(page, 0, totalPages - 1);
+
         var users = await db.Users
             .Where(u => u.IsActive)
+            .OrderBy(u => u.Name)
             .ToListAsync();
 
-        var moscowNow = timeZoneUtilities.GetMoscowDateTime();
-        var startMoscowDate = moscowNow.Date;
-        var endMoscowDate = startMoscowDate.AddDays(13);
+        var startMoscowDate = timeZoneUtilities.GetMoscowDate();
+        var endMoscowDateExclusive = startMoscowDate.AddDays(totalDays);
 
         var startUtcDate = timeZoneUtilities.ConvertToUtc(startMoscowDate);
-        var endUtcDate = timeZoneUtilities.ConvertToUtc(endMoscowDate.AddDays(1));
-
-        var sb = new StringBuilder();
+        var endUtcDate = timeZoneUtilities.ConvertToUtc(endMoscowDateExclusive);
 
         var allResponses = await db.Responses
+            .Include(r => r.User)
             .Where(r => r.DateTime.HasValue && r.User.IsActive &&
                         r.DateTime.Value >= startUtcDate && r.DateTime.Value < endUtcDate)
             .ToListAsync();
 
+        var responseByUserAndDate = allResponses
+            .GroupBy(r => (r.User.Id, timeZoneUtilities.ConvertToMoscow(r.DateTime!.Value).Date))
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var sb = new StringBuilder();
         sb.AppendLine("<b>📅 РАСПИСАНИЕ БРАТСТВА</b>");
+        sb.AppendLine($"<i>Лист {page + 1} из {totalPages}</i>");
         sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         sb.AppendLine();
 
-        for (var i = 0; i < 12; i++)
+        var pageStart = page * daysPerPage;
+        var pageEnd = Math.Min(pageStart + daysPerPage, totalDays);
+
+        for (var i = pageStart; i < pageEnd; i++)
         {
             var moscowDate = startMoscowDate.AddDays(i);
             var isToday = moscowDate == startMoscowDate;
@@ -217,33 +250,46 @@ public class CommandHandler(
 
             sb.AppendLine($"<b>{timeZoneUtilities.FormatDate(moscowDate)}</b>{dayMarker}");
 
-            var dayResponses = new List<string>();
-            foreach (var user in users)
+            foreach (var activeUser in users)
             {
-                var response = allResponses
-                    .FirstOrDefault(r => r.User.Username == user.Username &&
-                                         timeZoneUtilities.ConvertToMoscow(r.DateTime!.Value).Date == moscowDate);
+                responseByUserAndDate.TryGetValue((activeUser.Id, moscowDate), out var response);
 
                 var time = string.Empty;
-
                 if (response is { Availability: Availability.Yes, DateTime: not null } &&
-                    response.DateTime.Value.TimeOfDay != TimeSpan.Zero)
+                    timeZoneUtilities.ConvertToMoscow(response.DateTime.Value).TimeOfDay != TimeSpan.Zero)
                 {
                     var moscowTime = timeZoneUtilities.ConvertToMoscow(response.DateTime.Value);
                     time = $" <i>с {timeZoneUtilities.FormatTime(moscowTime)}</i>";
                 }
 
                 var availability = (response?.Availability ?? Availability.Unknown).ToSign();
-                dayResponses.Add($"  {availability} {user.Name}{time}");
+                sb.AppendLine($"  {availability} {activeUser.Name}{time}");
             }
 
-            sb.AppendLine(string.Join("\n", dayResponses));
             sb.AppendLine();
         }
 
-        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId, text: sb.ToString(),
-            parseMode: ParseMode.Html, linkPreviewOptions: true,
-            replyMarkup: new ReplyKeyboardRemove());
+        var keyboard = new InlineKeyboardMarkup(
+            keyboardGenerator.GenerateGetScheduleKeyboard(page, totalPages, userId));
+
+        if (editMessageId.HasValue)
+        {
+            await bot.EditMessageText(
+                chatId,
+                editMessageId.Value,
+                sb.ToString(),
+                parseMode: ParseMode.Html,
+                replyMarkup: keyboard);
+            return;
+        }
+
+        await bot.SendMessage(
+            chatId,
+            text: sb.ToString(),
+            messageThreadId: messageThreadId,
+            parseMode: ParseMode.Html,
+            linkPreviewOptions: true,
+            replyMarkup: keyboard);
     }
 
     private async Task HandlePauseCommand(Message msg)

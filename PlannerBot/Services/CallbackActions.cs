@@ -22,6 +22,9 @@ public static class CallbackActions
     /// <summary>User pressed the "Done" button to finish planning.</summary>
     public const string PlanDone = "pd";
 
+    /// <summary>User changed the page in the /get schedule view.</summary>
+    public const string GetPage = "gp";
+
     /// <summary>Creator pressed the cancel button on a voting session.</summary>
     public const string VoteCancel = "vc";
 

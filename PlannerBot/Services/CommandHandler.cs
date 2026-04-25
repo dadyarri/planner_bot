@@ -202,10 +202,16 @@ public class CommandHandler(
             await db.SaveChangesAsync();
         }
 
-        await SendSchedulePage(msg.Chat.Id, msg.MessageThreadId, user.Id, 0);
+        await SendSchedulePage(msg.Chat.Id, msg.MessageThreadId, user.Id, 0, commandMessageId: msg.Id);
     }
 
-    internal async Task SendSchedulePage(long chatId, int? messageThreadId, long userId, int page, int? editMessageId = null)
+    internal async Task SendSchedulePage(
+        long chatId,
+        int? messageThreadId,
+        long userId,
+        int page,
+        int? editMessageId = null,
+        int? commandMessageId = null)
     {
         const int totalDays = 12;
         const int daysPerPage = 3;
@@ -270,7 +276,7 @@ public class CommandHandler(
         }
 
         var keyboard = new InlineKeyboardMarkup(
-            keyboardGenerator.GenerateGetScheduleKeyboard(page, totalPages, userId));
+            keyboardGenerator.GenerateGetScheduleKeyboard(page, totalPages, userId, commandMessageId));
 
         if (editMessageId.HasValue)
         {
@@ -289,6 +295,7 @@ public class CommandHandler(
             messageThreadId: messageThreadId,
             parseMode: ParseMode.Html,
             linkPreviewOptions: true,
+            replyParameters: commandMessageId.HasValue ? new ReplyParameters { MessageId = commandMessageId.Value } : null,
             replyMarkup: keyboard);
     }
 
@@ -346,7 +353,7 @@ public class CommandHandler(
     private async Task HandlePlanCommand(Message msg)
     {
         var user = await EnsureUser(msg);
-        var calendar = await keyboardGenerator.GeneratePlanKeyboard(user.Id);
+        var calendar = await keyboardGenerator.GeneratePlanKeyboard(user.Id, msg.Id);
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: "🗓️ Начертай свой путь на грядущие луны:", parseMode: ParseMode.Html,

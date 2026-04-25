@@ -119,11 +119,12 @@ public partial class UpdateHandler(
                     LogReceivedPlanCommand(logger);
                     var date = DateTime.ParseExact(split[1], "dd/MM/yyyy", CultureInfo.InvariantCulture);
                     var userId = long.Parse(split[2]);
+                    var commandMessageId = split.Length > 3 ? int.Parse(split[3]) : (int?)null;
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
                     if (user is null) return;
 
                     await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                        new InlineKeyboardMarkup(keyboardGenerator.GenerateStatusKeyboard(date, userId)));
+                        new InlineKeyboardMarkup(keyboardGenerator.GenerateStatusKeyboard(date, userId, commandMessageId)));
 
                     break;
                 }
@@ -133,6 +134,7 @@ public partial class UpdateHandler(
                     var availability = int.Parse(split[1]);
                     var date = DateTime.ParseExact(split[2], "dd/MM/yyyy", CultureInfo.InvariantCulture);
                     var userId = long.Parse(split[3]);
+                    var commandMessageId = split.Length > 4 ? int.Parse(split[4]) : (int?)null;
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
                     if (user is null) return;
 
@@ -143,13 +145,13 @@ public partial class UpdateHandler(
                     {
                         await bot.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                             text: "🕐 Назови час присоединения к грядущей битве",
-                            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, userId)));
+                            replyMarkup: new InlineKeyboardMarkup(keyboardGenerator.GenerateTimeKeyboard(utcDate, userId, commandMessageId)));
                     }
                     else
                     {
                         await availabilityManager.UpdateResponseForDate(callbackQuery.From, selectedAvailability, utcDate);
                         await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                            new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId)));
+                            new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId, commandMessageId)));
                     }
 
                     break;
@@ -163,6 +165,7 @@ public partial class UpdateHandler(
                         DateTimeKind.Utc
                     );
                     var userId = long.Parse(split[2]);
+                    var commandMessageId = split.Length > 3 ? int.Parse(split[3]) : (int?)null;
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
                     if (user is null) return;
 
@@ -172,7 +175,7 @@ public partial class UpdateHandler(
 
                     await bot.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
                         text: "🗓️ Примени заклинание предсказания - объяви о свободных днях:",
-                        replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId)));
+                        replyMarkup: new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId, commandMessageId)));
 
                     break;
                 }
@@ -180,16 +183,20 @@ public partial class UpdateHandler(
                 {
                     LogReceivedPbackCommand(logger);
                     var userId = long.Parse(split[1]);
+                    var commandMessageId = split.Length > 2 ? int.Parse(split[2]) : (int?)null;
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
                     if (user is null) return;
 
                     await bot.EditMessageReplyMarkup(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id,
-                        new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId)));
+                        new InlineKeyboardMarkup(await keyboardGenerator.GeneratePlanKeyboard(userId, commandMessageId)));
                     break;
                 }
             case CallbackActions.PlanDone:
                 {
-                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    var commandMessageId = split.Length > 1 ? int.Parse(split[1]) : (int?)null;
+                    await DeleteMessageIfExists(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    if (commandMessageId.HasValue)
+                        await DeleteMessageIfExists(callbackQuery.Message.Chat.Id, commandMessageId.Value);
                     await availabilityManager.SetUnavailableForUnmarkedDays(callbackQuery.From.Username);
 
                     // Compute per-campaign free slots
@@ -244,6 +251,7 @@ public partial class UpdateHandler(
             case CallbackActions.GetPage:
                 {
                     var page = int.Parse(split[1]);
+                    var commandMessageId = split.Length > 3 ? int.Parse(split[3]) : (int?)null;
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
                     if (user is null) return;
 
@@ -252,7 +260,8 @@ public partial class UpdateHandler(
                         callbackQuery.Message.MessageThreadId,
                         user.Id,
                         page,
-                        callbackQuery.Message.Id);
+                        callbackQuery.Message.Id,
+                        commandMessageId);
                     break;
                 }
             case CallbackActions.VoteCancel:
@@ -695,10 +704,17 @@ public partial class UpdateHandler(
             case CallbackActions.Dismiss:
                 {
                     var userId = long.Parse(split[1]);
+                    var commandMessageId = split.Length > 2 ? int.Parse(split[2]) : (int?)null;
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, userId);
                     if (user is null) return;
 
-                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    var repliedMessageId = callbackQuery.Message!.ReplyToMessage?.Id;
+
+                    await DeleteMessageIfExists(callbackQuery.Message.Chat.Id, callbackQuery.Message.Id);
+                    if (commandMessageId.HasValue)
+                        await DeleteMessageIfExists(callbackQuery.Message.Chat.Id, commandMessageId.Value);
+                    else if (repliedMessageId.HasValue)
+                        await DeleteMessageIfExists(callbackQuery.Message.Chat.Id, repliedMessageId.Value);
                     break;
                 }
             case CallbackActions.OrderOverride:
@@ -1089,5 +1105,19 @@ public partial class UpdateHandler(
         }
 
         return user;
+    }
+
+    private async Task DeleteMessageIfExists(long chatId, int messageId)
+    {
+        try
+        {
+            await bot.DeleteMessage(chatId, messageId);
+        }
+        catch (ApiRequestException ex) when (
+            ex.Message.Contains("message to delete not found", StringComparison.OrdinalIgnoreCase) ||
+            ex.Message.Contains("message can't be deleted", StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogDebug(ex, "Ignoring delete failure for message {MessageId} in chat {ChatId}", messageId, chatId);
+        }
     }
 }

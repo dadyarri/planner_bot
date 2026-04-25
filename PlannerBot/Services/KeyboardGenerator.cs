@@ -17,7 +17,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     /// Generates a keyboard for planning availability over 12 days.
     /// Displays current availability status for each day.
     /// </summary>
-    public async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(long userId)
+    public async Task<InlineKeyboardButton[][]> GeneratePlanKeyboard(long userId, int? commandMessageId = null)
     {
         var now = DateTime.UtcNow;
         var today = now.Date;
@@ -61,7 +61,9 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
                 var format = date.ToString("dd.MM (ddd)", culture);
                 inlineKeyboardButtons[w][d] = InlineKeyboardButton.WithCallbackData(
                     $"{emoji}{format}",
-                    $"{CallbackActions.Plan};{date:dd/MM/yyyy};{userId}"
+                    commandMessageId.HasValue
+                        ? $"{CallbackActions.Plan};{date:dd/MM/yyyy};{userId};{commandMessageId.Value}"
+                        : $"{CallbackActions.Plan};{date:dd/MM/yyyy};{userId}"
                 );
             }
         }
@@ -70,7 +72,9 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         [
             InlineKeyboardButton.WithCallbackData(
                 "Закончить",
-                CallbackActions.PlanDone
+                commandMessageId.HasValue
+                    ? $"{CallbackActions.PlanDone};{commandMessageId.Value}"
+                    : CallbackActions.PlanDone
             )
         ];
 
@@ -82,17 +86,26 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     /// </summary>
     public InlineKeyboardButton[][] GenerateStatusKeyboard(
         DateTime date,
-        long userId)
+        long userId,
+        int? commandMessageId = null)
     {
         return
         [
             [
-                InlineKeyboardButton.WithCallbackData("🟢", $"{CallbackActions.PlanStatus};{(int)Availability.Yes};{date:dd/MM/yyyy};{userId}"),
-                InlineKeyboardButton.WithCallbackData("🔴", $"{CallbackActions.PlanStatus};{(int)Availability.No};{date:dd/MM/yyyy};{userId}"),
-                InlineKeyboardButton.WithCallbackData("🤷", $"{CallbackActions.PlanStatus};{(int)Availability.Probably};{date:dd/MM/yyyy};{userId}"),
+                InlineKeyboardButton.WithCallbackData("🟢", commandMessageId.HasValue
+                    ? $"{CallbackActions.PlanStatus};{(int)Availability.Yes};{date:dd/MM/yyyy};{userId};{commandMessageId.Value}"
+                    : $"{CallbackActions.PlanStatus};{(int)Availability.Yes};{date:dd/MM/yyyy};{userId}"),
+                InlineKeyboardButton.WithCallbackData("🔴", commandMessageId.HasValue
+                    ? $"{CallbackActions.PlanStatus};{(int)Availability.No};{date:dd/MM/yyyy};{userId};{commandMessageId.Value}"
+                    : $"{CallbackActions.PlanStatus};{(int)Availability.No};{date:dd/MM/yyyy};{userId}"),
+                InlineKeyboardButton.WithCallbackData("🤷", commandMessageId.HasValue
+                    ? $"{CallbackActions.PlanStatus};{(int)Availability.Probably};{date:dd/MM/yyyy};{userId};{commandMessageId.Value}"
+                    : $"{CallbackActions.PlanStatus};{(int)Availability.Probably};{date:dd/MM/yyyy};{userId}"),
             ],
             [
-                InlineKeyboardButton.WithCallbackData("Назад", $"{CallbackActions.PlanBack};{userId}")
+                InlineKeyboardButton.WithCallbackData("Назад", commandMessageId.HasValue
+                    ? $"{CallbackActions.PlanBack};{userId};{commandMessageId.Value}"
+                    : $"{CallbackActions.PlanBack};{userId}")
             ]
         ];
     }
@@ -102,7 +115,8 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     /// </summary>
     public InlineKeyboardButton[][] GenerateTimeKeyboard(
         DateTime date,
-        long userId)
+        long userId,
+        int? commandMessageId = null)
     {
         var start = new TimeSpan(6, 0, 0);
         var end = new TimeSpan(17, 30, 0);
@@ -121,7 +135,9 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
             currentRow.Add(
                 InlineKeyboardButton.WithCallbackData(
                     localDt.ToString("HH:mm"),
-                    $"{CallbackActions.PlanTime};{dt:dd/MM/yyyyTHH:mm};{userId}"
+                    commandMessageId.HasValue
+                        ? $"{CallbackActions.PlanTime};{dt:dd/MM/yyyyTHH:mm};{userId};{commandMessageId.Value}"
+                        : $"{CallbackActions.PlanTime};{dt:dd/MM/yyyyTHH:mm};{userId}"
                 )
             );
 
@@ -137,7 +153,9 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         [
             InlineKeyboardButton.WithCallbackData(
                 "Назад",
-                $"{CallbackActions.PlanBack};{userId}"
+                commandMessageId.HasValue
+                    ? $"{CallbackActions.PlanBack};{userId};{commandMessageId.Value}"
+                    : $"{CallbackActions.PlanBack};{userId}"
             )
         ]);
 
@@ -164,7 +182,7 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     /// Generates a pager keyboard for the /get schedule view.
     /// Shows 3 days per page across the 12-day window and a close button to remove the message.
     /// </summary>
-    public InlineKeyboardButton[][] GenerateGetScheduleKeyboard(int page, int totalPages, long userId)
+    public InlineKeyboardButton[][] GenerateGetScheduleKeyboard(int page, int totalPages, long userId, int? commandMessageId = null)
     {
         var navigationButtons = new List<InlineKeyboardButton>();
 
@@ -173,7 +191,9 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
             navigationButtons.Add(
                 InlineKeyboardButton.WithCallbackData(
                     "⬅️ Назад",
-                    $"{CallbackActions.GetPage};{page - 1};{userId}")
+                    commandMessageId.HasValue
+                        ? $"{CallbackActions.GetPage};{page - 1};{userId};{commandMessageId.Value}"
+                        : $"{CallbackActions.GetPage};{page - 1};{userId}")
             );
         }
 
@@ -182,7 +202,9 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
             navigationButtons.Add(
                 InlineKeyboardButton.WithCallbackData(
                     "Вперёд ➡️",
-                    $"{CallbackActions.GetPage};{page + 1};{userId}")
+                    commandMessageId.HasValue
+                        ? $"{CallbackActions.GetPage};{page + 1};{userId};{commandMessageId.Value}"
+                        : $"{CallbackActions.GetPage};{page + 1};{userId}")
             );
         }
 
@@ -194,7 +216,9 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         [
             InlineKeyboardButton.WithCallbackData(
                 "❌ Закрыть",
-                $"{CallbackActions.Dismiss};{userId}")
+                commandMessageId.HasValue
+                    ? $"{CallbackActions.Dismiss};{userId};{commandMessageId.Value}"
+                    : $"{CallbackActions.Dismiss};{userId}")
         ]);
 
         return buttons.ToArray();

@@ -256,13 +256,13 @@ public class VotingManager(
         sb.AppendLine($"👍 За: {refreshedSession.VoteCount}/{activeUsers.Count}");
 
         if (forVoters.Count > 0)
-            sb.AppendLine($"  └ {string.Join(", ", forVoters)}");
+            sb.AppendLine($"  └ {string.Join(", ", forVoters.Select(v => v.Name))}");
 
         if (refreshedSession.AgainstCount > 0 || againstVoters.Count > 0)
         {
             sb.AppendLine($"👎 Против: {refreshedSession.AgainstCount}");
             if (againstVoters.Count > 0)
-                sb.AppendLine($"  └ {string.Join(", ", againstVoters)}");
+                sb.AppendLine($"  └ {string.Join(", ", againstVoters.Select(v => v.Name))}");
         }
 
         sb.AppendLine();

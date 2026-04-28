@@ -1,111 +1,167 @@
 # PlannerBot — Agent Instructions
 
-## Project Overview
+## Purpose
 
-PlannerBot is a Telegram bot for coordinating D&D game sessions. It helps a group of players declare their weekly availability, vote on proposed game times, and receive reminders before scheduled games.
+PlannerBot is a Telegram bot for coordinating tabletop sessions. It collects availability, starts vote sessions for proposed game times, saves approved games, and schedules reminders.
 
-**Tech stack:** .NET 10, C#, Entity Framework Core (PostgreSQL), Telegram.Bot SDK, TickerQ (scheduled jobs), Humanizer (Russian time-span humanization in messages).
+Primary stack:
+- .NET 10
+- C#
+- Entity Framework Core with PostgreSQL
+- Telegram.Bot
+- TickerQ
+- Humanizer
 
-**Architecture:**
-- `Services/UpdateHandler.cs` — Routes Telegram updates (messages, callbacks, reactions) to handlers
-- `Services/UpdateHandler.logger.cs` — High-performance log methods via `[LoggerMessage]` (partial class of `UpdateHandler`)
-- `Services/CommandHandler.cs` — Processes bot commands (`/plan`, `/vote`, `/yes`, `/no`, etc.)
-- `Services/AvailabilityManager.cs` — Business logic for availability tracking (responses, date checking)
-- `Services/VotingManager.cs` — Voting session lifecycle (creation, vote recording, outcome evaluation, messaging)
-- `Services/GameScheduler.cs` — Game saving and reminder scheduling
-- `Services/KeyboardGenerator.cs` — Generates inline keyboards for Telegram
-- `Services/TimeZoneUtilities.cs` — UTC ↔ Moscow timezone conversions
-- `Background/Jobs.cs` — Scheduled jobs (reminders, vote expiry, weekly notifications)
-- `Background/*JobContext.cs` — TickerQ job payload types (`SendReminderJobContext`, `VoteReminderJobContext`, `VoteSessionExpiryJobContext`, `WeeklyVotingReminderJobContext`)
-- `Data/` — Entity Framework entities and migrations
+## Repository Layout
 
-**Bot commands:**
+Repo root:
+- `PlannerBot.slnx` — solution entrypoint
+- `PlannerBot/` — main application project
 
-| Command | Description |
-|---|---|
-| `/start` | Show command reference |
-| `/yes hh:mm` | Mark available today at the given time |
-| `/no` | Mark unavailable today; cancels today's saved games and their reminders |
-| `/prob` | Mark tentatively available today |
-| `/get` | Show 12-day availability grid for all active users |
-| `/plan` | Open 12-day inline keyboard to set weekly availability |
-| `/pause` | Mark user inactive (excluded from availability checks and reminders) |
-| `/unpause` | Reactivate an inactive user |
-| `/vote dd.MM.yyyy HH:mm` | Manually start a voting session for a specific date/time |
-| `/saved` | List upcoming saved games (with IDs for `/unsave`) |
-| `/unsave <id>` | Delete a saved game and cancel its scheduled reminders |
-| `/weekly` | One-time setup: schedule recurring Saturday 21:00 UTC `/plan` reminder |
+Project structure under `PlannerBot/`:
+- `Program.cs` — composition root and service registration
+- `Abstract/` — shared receiver/background abstractions
+- `Background/` — TickerQ jobs and job payload contracts
+- `Data/` — EF Core entities, `AppDbContext`, and migrations
+- `Properties/` — launch settings and assembly metadata
+- `Services/` — bot behavior and application logic
 
-## Formatting Requirements
+Important service files:
+- `Services/UpdateHandler.cs` — routes Telegram updates to handlers
+- `Services/UpdateHandler.logger.cs` — high-performance log methods via `[LoggerMessage]`
+- `Services/CommandHandler.cs` — slash command handling
+- `Services/AvailabilityManager.cs` — availability rules and response updates
+- `Services/VotingManager.cs` — voting lifecycle, counters, messaging
+- `Services/GameScheduler.cs` — saved games and reminder scheduling
+- `Services/KeyboardGenerator.cs` — inline keyboard generation
+- `Services/TimeZoneUtilities.cs` — UTC and Moscow conversions
+- `Background/Jobs.cs` — scheduled reminder and expiry jobs
 
-**Always run `dotnet format` in the `PlannerBot/` project folder before committing.** This ensures consistent code style across the project.
+## Product Rules
 
-```bash
-cd PlannerBot && dotnet format
-```
+- Bot-facing text must be in Russian.
+- Tone should have light fantasy / D&D flavor.
+- Store all persisted datetimes in UTC.
+- Convert to Europe/Moscow for user-facing display.
+- Use `TimeZoneUtilities` for conversions. Do not introduce `DateTime.Now`-based logic.
+- Do not mention GitHub users with `@name` in commits, PR text, review text, notes, or documentation.
+- Telegram username mentions inside bot message code are allowed when they are actual product behavior.
 
-## CRITICAL: Never Mention Users
+## Voting Rules
 
-**DO NOT EVER use the `@username` syntax in:**
-- Commit messages
-- Pull request titles, descriptions, or comments
-- Any GitHub-related text (issues, reviews, etc.)
-- Your thought process or planning notes
-- Any other text that could trigger GitHub user notifications
+- Votes are tracked per user in `VoteSessionVotes`.
+- Aggregate counters on `VoteSessions` are the authoritative source for vote thresholds.
+- Counter changes must be atomic. Use `ExecuteUpdateAsync` for increment/decrement operations.
+- Any code that evaluates vote completion or renders aggregate counts must read fresh database state, not rely on stale tracked entities.
+- `Saved` means all active campaign members voted `For`.
+- `NoConsensus` means `AgainstCount >= (activeUsersCount + 1) / 2`.
+- Vote removal must reverse the matching aggregate counter atomically.
 
-This includes common placeholder names — do not write things like `@alice`, `@bob`, `@user1`, etc., since these are real GitHub accounts and mentioning them sends unwanted notifications to real people.
+## Development Requirements
 
-**Exception:** Using `@{username}` syntax inside C# code is allowed when it's part of building Telegram messages (e.g., `$"@{user.Username}"`), because Telegram usernames are different from GitHub usernames and this code runs server-side.
+Use normal .NET backend best practices, not ad hoc shortcuts.
 
-When referring to users in documentation or examples, use display names without the `@` prefix (e.g., "User A", "User B", "the creator", "the DM").
+- Keep business rules in services, not in Telegram transport code.
+- Prefer small, explicit methods with single responsibilities.
+- Preserve async flow end-to-end; do not block on async calls.
+- Use dependency injection instead of service locators or static state.
+- Keep database writes intentional and minimal.
+- Favor EF Core queries that are explicit about tracking behavior.
+- Use `AsNoTracking()` for read-only queries where tracked entities are not required.
+- Use atomic database updates for shared counters and race-prone state transitions.
+- Do not duplicate business rules across handlers and managers.
+- Keep bot messages and formatting centralized when practical.
+- Add new `UpdateHandler` logs in `Services/UpdateHandler.logger.cs` using `[LoggerMessage]`.
+- Respect existing architecture before introducing new abstractions.
 
-## Bot Language
+## EF Core Guidance
 
-All messages the bot sends to Telegram must be in **Russian** with a **fantasy/D&D flavor** (medieval language, references to quests, battles, brotherhood, ancient magic, etc.).
+- Treat tracked entities as potentially stale after `ExecuteUpdateAsync` / `ExecuteDeleteAsync`.
+- Reload or query fresh state when later logic depends on the updated values.
+- Avoid mixing tracked and non-tracked reads carelessly in the same flow.
+- Keep migrations focused and reversible when possible.
+- Do not hand-edit old migrations unless explicitly required.
 
-## DateTime Handling
+## Migration Rules
 
-- **Store:** Always UTC in the database
-- **Display:** Always Europe/Moscow timezone for user-facing messages
-- Use `TimeZoneUtilities` for all conversions — never call `DateTime.Now` or assume system timezone
-- `CheckIfDateIsAvailable` returns Moscow time; use `ConvertToUtc()` before storing
+This rule is strict:
+- Never write migration files manually.
+- Never create a migration `.cs` file with `apply_patch`.
+- Never create a migration `.Designer.cs` file with `apply_patch`.
+- Never manually edit `AppDbContextModelSnapshot.cs` to simulate a generated migration.
+- Always generate migrations with `dotnet ef migrations add <MigrationName>`.
+- If a generated migration is wrong, fix the model and regenerate it with `dotnet ef migrations remove` followed by `dotnet ef migrations add ...`.
+- If a migration must be reverted, use `dotnet ef migrations remove` when possible instead of manually deleting migration files.
 
-## Voting System
+Create migrations with:
 
-The voting system uses Telegram emoji reactions (👍 for, 👎 against) on messages:
-- Per-user vote tracking via `VoteSessionVote` join table
-- Vote deduplication (one vote per user per session)
-- Distinct outcomes: `Pending`, `Saved`, `Expired`, `Canceled`, `NoConsensus`
-- `Saved` triggers when `VoteCount >= activeUsersCount` (all active users voted FOR)
-- `NoConsensus` triggers when `AgainstCount >= (activeUsersCount + 1) / 2` (ceiling of half)
-- Votes can be retracted — removing a reaction calls `RemoveVote` and decrements counters atomically
-- 24h TTL with automatic expiry
-- 12h non-voter reminder
-- Bot's own reactions are filtered out
-- Cancel button uses callback data with creator username for ownership verification (same pattern as `/plan` command)
-- Users who vote against (👎) are excluded from game reminders
-
-## Key Patterns
-
-- Inline keyboard buttons embed the owner's username in callback data for server-side access control (buttons are visible to everyone, but only the owner's clicks are processed)
-- Callback data is semicolon-delimited: `"action;param1;...;username"`. Route on `split[0]`, guard ownership by comparing the username segment to `callbackQuery.From.Username`. Current actions: `plan`, `pstatus`, `ptime`, `pback`, `delete`, `vote_cancel`
-- `ExecuteUpdateAsync` is used for atomic counter operations to prevent race conditions
-- All scheduled jobs use TickerQ (`TimeTickerEntity` for one-time, `CronTickerEntity` for recurring)
-- TickerQ function name strings (must match `[TickerFunction("name")]` in `Jobs.cs` and `AddAsync` calls): `send_reminder`, `send_vote_reminder`, `expire_vote_session`, `send_weekly_voting_reminder`
-- Reminder intervals before a game: 48h, 24h, 5h, 3h, 1h, 10min (see `GameScheduler.ReminderIntervals`)
-- `Availability.ToSign()` uses C# 14 explicit extension member syntax (`extension(Availability) { ... }`) in `Availability.cs` — intentional, do not refactor to classic static extension methods
-- New log messages for `UpdateHandler` go in `UpdateHandler.logger.cs` as `[LoggerMessage]`-attributed static partial methods
-
-## Database Migrations
-
-Generate migrations with:
 ```bash
 cd PlannerBot
 DATABASE_URL="Host=localhost;Database=planner_bot;Username=postgres;Password=postgres" \
   dotnet ef migrations add <MigrationName>
 ```
 
-## Environment Variables
+The snapshot file is generated artifact, not handwritten source of truth.
 
-- `DATABASE_URL` — PostgreSQL connection string (required at startup and for migrations)
-- `TELEGRAM_TOKEN` — Telegram Bot API token (required at startup)
+## Verification Requirements
+
+Before finishing substantial code changes:
+- build the solution
+- run formatting
+- report any tooling failures clearly if the environment prevents completion
+
+Preferred commands:
+
+```bash
+dotnet restore PlannerBot.slnx
+dotnet build PlannerBot.slnx
+cd PlannerBot && dotnet format
+```
+
+## Mandatory Escalation Rule For .NET Commands
+
+Always request escalated permissions before running any of these commands:
+- `dotnet restore`
+- `dotnet build`
+- `dotnet format`
+- `dotnet ef`
+
+This rule applies even if the command might succeed in the sandbox. The reason is practical: these commands may need network access, MSBuild child processes, SDK workload checks, restore caches, or filesystem locations outside the writable sandbox.
+
+When possible, use these approved command shapes:
+- `dotnet restore PlannerBot.slnx'`
+- `dotnet build PlannerBot.slnx'`
+- `dotnet format PlannerBot.slnx --no-restore'`
+
+If a command still fails due to environment or SDK issues, do not hide it. State exactly which command failed and why.
+
+## TickerQ And Background Jobs
+
+- Keep TickerQ function names aligned with `[TickerFunction("...")]` attributes.
+- One-time jobs use `TimeTickerEntity`.
+- Recurring jobs use `CronTickerEntity`.
+- Changing payload contracts in `Background/*JobContext.cs` requires checking all producers and consumers.
+
+Current function names:
+- `send_reminder`
+- `send_vote_reminder`
+- `expire_vote_session`
+- `send_weekly_voting_reminder`
+
+## Callback And Telegram Patterns
+
+- Callback data is semicolon-delimited.
+- Route by the first segment.
+- Ownership checks must stay server-side.
+- Inline keyboards may be visible to everyone; authorization must not depend on UI visibility.
+- Filter out the bot's own reactions.
+
+## Environment
+
+Required environment variables:
+- `DATABASE_URL`
+- `TELEGRAM_TOKEN`
+
+## Formatting Rule
+
+Always run `dotnet format` before committing when the tool is functional in the environment. If it fails because of SDK or environment issues, mention that explicitly in the final report.

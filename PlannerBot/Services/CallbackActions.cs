@@ -37,6 +37,9 @@ public static class CallbackActions
     /// <summary>Super-admin toggled a user in the /campaign_join multi-select draft.</summary>
     public const string CampaignJoinToggle = "cjt";
 
+    /// <summary>Super-admin changed the page in the /campaign_join multi-select draft.</summary>
+    public const string CampaignJoinPage = "cjpg";
+
     /// <summary>Super-admin saved the /campaign_join multi-select draft.</summary>
     public const string CampaignJoinSave = "cjs";
 
@@ -45,6 +48,9 @@ public static class CallbackActions
 
     /// <summary>User selected a campaign from the campaign picker to leave.</summary>
     public const string CampaignLeave = "cl";
+
+    /// <summary>User selected a campaign from the picker for /campaign_members in a service thread.</summary>
+    public const string CampaignMembersPick = "cmp";
 
     /// <summary>DM selected a campaign from the campaign picker to delete.</summary>
     public const string CampaignNext = "cn";

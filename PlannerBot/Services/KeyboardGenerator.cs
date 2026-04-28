@@ -13,6 +13,8 @@ namespace PlannerBot.Services;
 /// </summary>
 public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilities)
 {
+    public const int CampaignJoinPickerPageSize = 8;
+
     /// <summary>
     /// Generates a keyboard for planning availability over 12 days.
     /// Displays current availability status for each day.
@@ -286,9 +288,15 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
         IReadOnlyList<User> users,
         IReadOnlySet<long> existingMemberIds,
         IReadOnlySet<long> selectedUserIds,
-        long callbackOwnerId)
+        long callbackOwnerId,
+        int page)
     {
+        var totalPages = Math.Max(1, (int)Math.Ceiling(users.Count / (double)CampaignJoinPickerPageSize));
+        page = Math.Clamp(page, 0, totalPages - 1);
+
         var buttons = users
+            .Skip(page * CampaignJoinPickerPageSize)
+            .Take(CampaignJoinPickerPageSize)
             .Select(u =>
             {
                 var prefix = existingMemberIds.Contains(u.Id)
@@ -303,10 +311,34 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
                 {
                     InlineKeyboardButton.WithCallbackData(
                         $"{prefix}{label}",
-                        $"{CallbackActions.CampaignJoinToggle};{u.Id};{callbackOwnerId}")
+                        $"{CallbackActions.CampaignJoinToggle};{u.Id};{callbackOwnerId};{page}")
                 };
             })
             .ToList();
+
+        if (totalPages > 1)
+        {
+            var navigation = new List<InlineKeyboardButton>();
+            if (page > 0)
+            {
+                navigation.Add(InlineKeyboardButton.WithCallbackData(
+                    "◀️",
+                    $"{CallbackActions.CampaignJoinPage};{page - 1};{callbackOwnerId}"));
+            }
+
+            navigation.Add(InlineKeyboardButton.WithCallbackData(
+                $"{page + 1}/{totalPages}",
+                $"{CallbackActions.CampaignJoinPage};{page};{callbackOwnerId}"));
+
+            if (page < totalPages - 1)
+            {
+                navigation.Add(InlineKeyboardButton.WithCallbackData(
+                    "▶️",
+                    $"{CallbackActions.CampaignJoinPage};{page + 1};{callbackOwnerId}"));
+            }
+
+            buttons.Add(navigation.ToArray());
+        }
 
         buttons.Add(
         [

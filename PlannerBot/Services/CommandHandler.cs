@@ -26,6 +26,7 @@ public class CommandHandler(
     AvailabilityManager availabilityManager,
     VotingManager votingManager,
     TimeZoneUtilities timeZoneUtilities,
+    AuthorizationService authorizationService,
     CampaignManager campaignManager,
     CampaignOrderService campaignOrderService,
     CampaignJoinDraftService campaignJoinDraftService,
@@ -85,6 +86,9 @@ public class CommandHandler(
             case "/campaign_leave":
                 await HandleCampaignLeaveCommand(msg);
                 break;
+            case "/campaign_members":
+                await HandleCampaignMembersCommand(msg);
+                break;
             case "/campaign_next":
                 await HandleCampaignNextCommand(msg);
                 break;
@@ -121,6 +125,7 @@ public class CommandHandler(
                 <b>🏰 Управление кампаниями:</b>
                 /campaign_new - Основать новую кампанию в этом потоке
                 /campaign_join - Вступить в ряды кампании
+                /campaign_members - Узреть состав братства кампании
                 /campaign_leave - Покинуть ряды кампании
                 /campaign_next - Передать ход следующей кампании (только текущий Мастер)
                 /service_thread - Пометить поток как служебный
@@ -374,7 +379,7 @@ public class CommandHandler(
             {
                 if (campaign is not null)
                 {
-                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+                    if (!authorizationService.CanManageCampaign(campaign, user))
                     {
                         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                             text: "⚠️ Только Мастер Подземелий может начать голосование!",
@@ -400,12 +405,12 @@ public class CommandHandler(
             }
 
             // Service thread or unknown — show campaign picker (all campaigns for super admin, DM campaigns otherwise)
-            var availableCampaigns = IsSuperAdmin(user)
+            var availableCampaigns = authorizationService.IsSuperAdmin(user)
                 ? await campaignManager.GetActiveCampaigns(msg.Chat.Id)
                 : await campaignManager.GetDmCampaigns(user.Id);
             if (availableCampaigns.Count == 0)
             {
-                var noCampaignsText = IsSuperAdmin(user)
+                var noCampaignsText = authorizationService.IsSuperAdmin(user)
                     ? "⚠️ В этом чате нет активных кампаний."
                     : "⚠️ У тебя нет кампаний, которыми ты управляешь. Используй /campaign_new в потоке форума.";
                 await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
@@ -453,12 +458,12 @@ public class CommandHandler(
         if (campaign is null)
         {
             // Not in a campaign thread — show campaign picker (all campaigns for super admin, DM campaigns otherwise)
-            var availableCampaigns = IsSuperAdmin(user)
+            var availableCampaigns = authorizationService.IsSuperAdmin(user)
                 ? await campaignManager.GetActiveCampaigns(msg.Chat.Id)
                 : await campaignManager.GetDmCampaigns(user.Id);
             if (availableCampaigns.Count == 0)
             {
-                var noCampaignsText = IsSuperAdmin(user)
+                var noCampaignsText = authorizationService.IsSuperAdmin(user)
                     ? "⚠️ В этом чате нет активных кампаний."
                     : "⚠️ У тебя нет кампаний, которыми ты управляешь. Используй /campaign_new в потоке форума.";
                 await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
@@ -477,7 +482,7 @@ public class CommandHandler(
         }
 
         // DM-only
-        if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+        if (!authorizationService.CanManageCampaign(campaign, user))
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "⚠️ Только Мастер Подземелий может начать голосование в этой кампании!",
@@ -623,7 +628,7 @@ public class CommandHandler(
             return;
         }
 
-        if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+        if (!authorizationService.CanManageCampaign(campaign, user))
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "⚠️ Только Мастер Подземелий может стереть запись о битве!",
@@ -681,12 +686,15 @@ public class CommandHandler(
         const string votingReminderFunctionName = "send_weekly_voting_reminder";
         const string votingReminderCron = "0 0 21 * * 6"; // Every Saturday 9pm UTC
 
-        // Check if voting reminder job already exists
         var existingJobs = await db.Set<CronTickerEntity>()
             .Where(c => c.Function == votingReminderFunctionName)
             .ToListAsync();
 
-        if (existingJobs.Count > 0)
+        var alreadyScheduledForThread = existingJobs
+            .Select(c => TickerHelper.ReadTickerRequest<WeeklyVotingReminderJobContext>(c.Request))
+            .Any(request => request.ChatId == msg.Chat.Id && request.ThreadId == msg.MessageThreadId);
+
+        if (alreadyScheduledForThread)
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "🔔 Глас уже вещает каждую седмицу!");
@@ -729,7 +737,7 @@ public class CommandHandler(
 
         var user = await EnsureUser(msg);
 
-        if (IsSuperAdmin(user))
+        if (authorizationService.IsSuperAdmin(user))
         {
             // Super-admin picks who becomes DM
             var activeUsers = await db.Users
@@ -775,7 +783,7 @@ public class CommandHandler(
     {
         var user = await EnsureUser(msg);
 
-        if (IsSuperAdmin(user))
+        if (authorizationService.IsSuperAdmin(user))
         {
             var campaign = await campaignManager.ResolveCampaignFromContext(
                 msg.Chat.Id, msg.MessageThreadId);
@@ -861,7 +869,8 @@ public class CommandHandler(
         int? threadId,
         int campaignId,
         long callbackOwnerId,
-        int? messageId = null)
+        int? messageId = null,
+        int page = 0)
     {
         var campaign = await campaignManager.GetActiveCampaign(campaignId);
         if (campaign is null)
@@ -886,6 +895,9 @@ public class CommandHandler(
             .OrderByDescending(u => u.IsActive)
             .ThenBy(u => u.Name)
             .ToListAsync();
+        var totalPages = Math.Max(1,
+            (int)Math.Ceiling(users.Count / (double)KeyboardGenerator.CampaignJoinPickerPageSize));
+        page = Math.Clamp(page, 0, totalPages - 1);
 
         var existingMemberIds = campaign.Members
             .Select(m => m.UserId)
@@ -897,7 +909,8 @@ public class CommandHandler(
             users,
             existingMemberIds,
             selectedUserIds,
-            callbackOwnerId);
+            callbackOwnerId,
+            page);
 
         var selectedCount = selectedUserIds.Count;
         var text = $"""
@@ -908,6 +921,7 @@ public class CommandHandler(
                     ⬜ Ещё не выбраны
 
                     Отмечено к призыву: <b>{selectedCount}</b>
+                    Страница: <b>{page + 1}/{totalPages}</b>
                     """;
 
         if (messageId.HasValue)
@@ -971,6 +985,84 @@ public class CommandHandler(
             replyMarkup: new InlineKeyboardMarkup(keyboard));
     }
 
+    private async Task HandleCampaignMembersCommand(Message msg)
+    {
+        var campaign = await campaignManager.ResolveCampaignFromContext(msg.Chat.Id, msg.MessageThreadId);
+        if (campaign is not null)
+        {
+            await SendCampaignMembers(msg.Chat.Id, msg.MessageThreadId, campaign.Id);
+            return;
+        }
+
+        var user = await EnsureUser(msg);
+        var campaigns = await campaignManager.GetActiveCampaigns(msg.Chat.Id);
+        if (campaigns.Count == 0)
+        {
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "⚠️ В этом чате нет активных кампаний.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        var keyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
+            CallbackActions.CampaignMembersPick, campaigns, user.Id);
+
+        await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+            text: "🏰 Выбери кампанию, чей отряд желаешь узреть:",
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
+    }
+
+    /// <summary>
+    /// Sends the DM and member roster for a campaign.
+    /// Shared by direct /campaign_members and service-thread picker flows.
+    /// </summary>
+    internal async Task SendCampaignMembers(long chatId, int? threadId, int campaignId)
+    {
+        var campaign = await campaignManager.GetCampaignDetails(campaignId);
+        if (campaign is null)
+        {
+            await bot.SendMessage(chatId, messageThreadId: threadId,
+                text: "⚠️ Кампания не найдена или более не активна.",
+                parseMode: ParseMode.Html);
+            return;
+        }
+
+        static string FormatUser(User user)
+        {
+            var label = string.IsNullOrWhiteSpace(user.Username)
+                ? user.Name
+                : $"@{user.Username}";
+            return user.IsActive ? label : $"{label} (в отшельничестве)";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"🏰 <b>{campaign.ForumThread.Name}</b>");
+        sb.AppendLine($"🧙 Мастер: {FormatUser(campaign.DungeonMaster)}");
+        sb.AppendLine();
+        sb.AppendLine("⚔️ <b>Состав братства:</b>");
+
+        var members = campaign.Members
+            .Select(m => m.User)
+            .OrderByDescending(u => u.IsActive)
+            .ThenBy(u => u.Name)
+            .ToList();
+
+        if (members.Count == 0)
+        {
+            sb.AppendLine("— пока никто не вступил под знамёна кампании.");
+        }
+        else
+        {
+            foreach (var member in members)
+                sb.AppendLine($"- {FormatUser(member)}");
+        }
+
+        await bot.SendMessage(chatId, messageThreadId: threadId,
+            text: sb.ToString(),
+            parseMode: ParseMode.Html);
+    }
+
     private async Task HandleCampaignNextCommand(Message msg)
     {
         var user = await EnsureUser(msg);
@@ -988,7 +1080,7 @@ public class CommandHandler(
         }
 
         // Only the DM of the current turn-holder (or super-admin) may advance the turn
-        if (currentCampaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+        if (!authorizationService.CanManageCampaign(currentCampaign, user))
         {
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
                 text: "⚠️ Передать ход может только Мастер текущей кампании в очереди.",
@@ -1139,7 +1231,7 @@ public class CommandHandler(
         int campaignId, DateTime utcGameDateTime, List<long> activeMemberIds)
     {
         var dateUtc = utcGameDateTime.Date;
-        return await db.SavedGame
+        var conflicts = await db.SavedGame
             .Where(sg => sg.CampaignId != campaignId &&
                          sg.DateTime.Date == dateUtc &&
                          db.CampaignMembers.Any(cm =>
@@ -1147,6 +1239,15 @@ public class CommandHandler(
             .Select(sg => sg.Campaign.ForumThread.Name)
             .Distinct()
             .ToListAsync();
+
+        logger.LogInformation(
+            "Collision detection for campaign {CampaignId} on {DateUtc:yyyy-MM-dd}: {ConflictCount} conflicts among {ActiveMemberCount} active members",
+            campaignId,
+            dateUtc,
+            conflicts.Count,
+            activeMemberIds.Count);
+
+        return conflicts;
     }
 
     /// <summary>
@@ -1164,12 +1265,6 @@ public class CommandHandler(
 
         await ticker.DeleteBatchAsync(jobIds);
     }
-
-    /// <summary>
-    /// Returns true if the user is the designated super-admin who may act on behalf of any DM.
-    /// </summary>
-    private static bool IsSuperAdmin(User user) =>
-        string.Equals(user.Username, BotConstants.SuperAdminUsername, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Ensures the user exists in the database. Creates if not found.

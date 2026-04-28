@@ -7,7 +7,10 @@ namespace PlannerBot.Services;
 /// Calculates available game slots by checking if all active users
 /// are available on a given date with confirmed start times.
 /// </summary>
-public class SlotCalculator(AppDbContext db, TimeZoneUtilities timeZoneUtilities)
+public class SlotCalculator(
+    AppDbContext db,
+    TimeZoneUtilities timeZoneUtilities,
+    ILogger<SlotCalculator> logger)
 {
     /// <summary>
     /// Checks if all active users are available on a date and returns their common available time.
@@ -69,6 +72,7 @@ public class SlotCalculator(AppDbContext db, TimeZoneUtilities timeZoneUtilities
 
         if (!currentCampaignId.HasValue)
         {
+            logger.LogInformation("Slot recalculation skipped: no current campaign is configured");
             return (null, []);
         }
 
@@ -80,10 +84,17 @@ public class SlotCalculator(AppDbContext db, TimeZoneUtilities timeZoneUtilities
 
         if (currentCampaign is null)
         {
+            logger.LogWarning(
+                "Slot recalculation skipped: current campaign {CampaignId} was not found",
+                currentCampaignId.Value);
             return (null, []);
         }
 
         var memberUserIds = currentCampaign.Members.Select(m => m.UserId).ToHashSet();
+        logger.LogInformation(
+            "Slot recalculation started for campaign {CampaignId} with {MemberCount} members",
+            currentCampaign.Id,
+            memberUserIds.Count);
 
         var slots = new List<DateTime>();
 
@@ -130,6 +141,11 @@ public class SlotCalculator(AppDbContext db, TimeZoneUtilities timeZoneUtilities
 
             slots.Add(commonTime);
         }
+
+        logger.LogInformation(
+            "Slot recalculation finished for campaign {CampaignId}: {SlotCount} slots found",
+            currentCampaign.Id,
+            slots.Count);
 
         return (currentCampaign, slots);
     }

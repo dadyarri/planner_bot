@@ -48,4 +48,70 @@ partial class UpdateHandler
 
     [LoggerMessage(LogLevel.Information, "Forum topic reopened: ChatId={ChatId}, ThreadId={ThreadId}")]
     static partial void LogForumTopicReopened(ILogger<UpdateHandler> logger, long chatId, int threadId);
+
+    [LoggerMessage(LogLevel.Information,
+        "Super-admin {SuperAdminUserId} picked campaign {CampaignId} for campaign join in chat {ChatId}")]
+    static partial void LogSuperAdminPickedCampaignJoinTarget(
+        ILogger<UpdateHandler> logger,
+        long superAdminUserId,
+        int campaignId,
+        long chatId);
+
+    [LoggerMessage(LogLevel.Information,
+        "Super-admin {SuperAdminUserId} toggled user {TargetUserId} in campaign join draft for campaign {CampaignId} in chat {ChatId}")]
+    static partial void LogSuperAdminToggledCampaignJoinUser(
+        ILogger<UpdateHandler> logger,
+        long superAdminUserId,
+        long targetUserId,
+        int campaignId,
+        long chatId);
+
+    [LoggerMessage(LogLevel.Warning,
+        "Campaign join draft missing for super-admin {SuperAdminUserId} in chat {ChatId}")]
+    static partial void LogMissingCampaignJoinDraft(
+        ILogger<UpdateHandler> logger,
+        long superAdminUserId,
+        long chatId);
+
+    [LoggerMessage(LogLevel.Warning,
+        "Campaign join draft for super-admin {SuperAdminUserId} points to missing campaign {CampaignId} in chat {ChatId}")]
+    static partial void LogCampaignJoinDraftTargetMissing(
+        ILogger<UpdateHandler> logger,
+        long superAdminUserId,
+        int campaignId,
+        long chatId);
+
+    [LoggerMessage(LogLevel.Information,
+        "Super-admin {SuperAdminUserId} saved campaign join draft for campaign {CampaignId} in chat {ChatId}; added {AddedCount}, reactivated {ReactivatedCount}")]
+    static partial void LogSuperAdminSavedCampaignJoinDraft(
+        ILogger<UpdateHandler> logger,
+        long superAdminUserId,
+        int campaignId,
+        long chatId,
+        int addedCount,
+        int reactivatedCount);
+
+    [LoggerMessage(LogLevel.Information,
+        "Super-admin {SuperAdminUserId} assigned user {TargetUserId} as DM for a new campaign in chat {ChatId}, thread {ThreadId}")]
+    static partial void LogSuperAdminAssignedCampaignDm(
+        ILogger<UpdateHandler> logger,
+        long superAdminUserId,
+        long targetUserId,
+        long chatId,
+        int threadId);
+
+    [LoggerMessage(LogLevel.Warning,
+        "Callback owner {OwnerUserId} was not found for callback from Telegram user {CallbackUsername}")]
+    static partial void LogCallbackOwnerMissing(
+        ILogger<UpdateHandler> logger,
+        long ownerUserId,
+        string? callbackUsername);
+
+    [LoggerMessage(LogLevel.Warning,
+        "Callback ownership mismatch: owner user {OwnerUserId} has username {OwnerUsername}, callback came from {CallbackUsername}")]
+    static partial void LogCallbackOwnerMismatch(
+        ILogger<UpdateHandler> logger,
+        long ownerUserId,
+        string? ownerUsername,
+        string? callbackUsername);
 }

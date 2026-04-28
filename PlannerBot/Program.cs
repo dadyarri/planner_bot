@@ -28,6 +28,7 @@ builder.Services.AddScoped<UpdateHandler>();
 builder.Services.AddScoped<ReceiverService>();
 builder.Services.AddScoped<TimeZoneUtilities>();
 builder.Services.AddScoped<KeyboardGenerator>();
+builder.Services.AddScoped<AuthorizationService>();
 builder.Services.AddScoped<AvailabilityManager>();
 builder.Services.AddScoped<SlotCalculator>();
 builder.Services.AddScoped<VotingManager>();

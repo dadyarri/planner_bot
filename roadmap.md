@@ -60,6 +60,7 @@ This is no longer an early prototype. The project has real workflow coverage, bu
 | `/unsave` | DM / super-admin | Removes a saved game and cancels its reminder jobs. |
 | `/campaign_new` | Anyone / super-admin | Creates a campaign in the current forum thread. Super-admin may pick any DM. |
 | `/campaign_join` | Anyone / super-admin | Regular users join the current campaign. Super-admin can pick a campaign first when needed, then multi-select any users, including inactive ones, and selected inactive users are reactivated on save. |
+| `/campaign_members` | Anyone | Shows the campaign DM and member roster, including inactive members. In service threads, campaign selection comes first. |
 | `/campaign_leave` | Member | Leaves the current campaign. |
 | `/campaign_next` | Turn-holder DM / super-admin | Advances turn order to the next campaign in the chat rotation. |
 | `/service_thread` | Anyone | Toggles the current forum thread as administrative. |
@@ -75,7 +76,7 @@ This is no longer an early prototype. The project has real workflow coverage, bu
 - `Saved` requires all active campaign members to vote `For`.
 - `NoConsensus` requires at least half of active users, rounded up, to vote `Against`.
 - Votes expire automatically after 24 hours.
-- Non-voters are reminded after 12 hours.
+- Non-voters are reminded at the next 08:00 Moscow time to avoid night mentions.
 - Vote-against users are excluded from game reminders.
 
 ### Scheduling And Jobs
@@ -104,6 +105,17 @@ This is no longer an early prototype. The project has real workflow coverage, bu
   - persisted draft state in DB
   - visible markers for existing members
   - reactivation of inactive selected users on save
+- Super-admin `/campaign_join` result messages list users who were reactivated during the save.
+- Super-admin `/campaign_join` user picker is paginated to keep large rosters manageable.
+- Vote reminder scheduling now targets the next 08:00 Moscow time instead of a fixed 12-hour delay.
+- Super-admin campaign joins are batched instead of saving once per selected user.
+- Structured logs were added for super-admin campaign join actions, stale drafts, DM assignment, and batch membership changes.
+- `/campaign_members` was added to inspect campaign DM and member roster from campaign or service threads.
+- Slot recalculation and scheduling collision checks now emit structured operational logs.
+- `/weekly` reminder setup is idempotent per chat/thread instead of globally blocking all future setups.
+- Protected callback ownership failures now emit warning logs for stale owners and mismatched users.
+- Super-admin and campaign-management checks now go through a shared authorization service.
+- Bulk update/delete usage was audited for stale tracked-entity reads; current risky vote paths already refresh with no-tracking queries.
 
 ---
 
@@ -115,7 +127,6 @@ These are the most obvious weaknesses in the current codebase:
 - Business rules are partly duplicated across direct command flows and callback flows.
 - There is very little visible automated test coverage around voting, scheduling, and permission logic.
 - Draft-like flows now exist in multiple places and use similar but separate persistence patterns.
-- Some operations still do repeated `SaveChangesAsync()` calls inside loops instead of batching.
 - Authorization rules are spread across handlers instead of being centralized.
 - The roadmap and usage text can drift from behavior unless they are maintained aggressively.
 
@@ -125,15 +136,11 @@ These are the most obvious weaknesses in the current codebase:
 
 ### Product / UX
 
-- Add pagination or filtering for large user lists in the super-admin `/campaign_join` picker.
-- Show campaign membership lists and DM information with a dedicated command.
-- Add clearer feedback when a user is auto-reactivated by super-admin membership changes.
+All current Product / UX items are implemented.
 
 ### Reliability
 
-- Add idempotency checks around job creation where duplicates would be harmful.
-- Reduce multi-step state changes that save partially and could leave inconsistent intermediate state.
-- Audit all places that mix `ExecuteUpdateAsync` with tracked entities and refresh rules.
+All current Reliability items are implemented or audited.
 
 ### Refactoring
 
@@ -143,15 +150,13 @@ These are the most obvious weaknesses in the current codebase:
   - voting commands
   - saved-game commands
   - order-management commands
-- Extract shared authorization helpers for DM, member, super-admin, and callback-owner checks.
+- Continue expanding shared authorization helpers beyond super-admin and campaign-management checks.
 - Unify draft storage patterns behind a reusable small draft abstraction or utility.
 - Centralize user-facing Russian message templates so tone and wording stay consistent.
 
 ### Observability
 
-- Add structured logs for campaign membership changes.
-- Add log coverage for slot recalculation decisions and collision detection.
-- Add warning logs for suspicious callback flows, stale draft usage, and race-prone edge cases.
+All current Observability items are implemented.
 
 ### Data / Domain Model
 
@@ -162,6 +167,4 @@ These are the most obvious weaknesses in the current codebase:
 ## Suggested Near-Term Plan
 
 1. Refactor callback handling into smaller feature-specific units before `UpdateHandler` grows further.
-2. Add audit-style logging for super-admin actions and other privileged mutations.
-3. Improve large-list UX for admin pickers.
-4. Review repeated DB write patterns and batch where practical.
+2. Continue structural refactoring of handlers and authorization.

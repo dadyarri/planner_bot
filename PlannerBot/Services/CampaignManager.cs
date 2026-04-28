@@ -96,6 +96,73 @@ public class CampaignManager(AppDbContext db, ILogger<CampaignManager> logger)
     }
 
     /// <summary>
+    /// Adds multiple users to a campaign in one batched operation.
+    /// Optionally reactivates inactive users before adding them.
+    /// Returns only users that were actually added.
+    /// </summary>
+    public async Task<(List<User> AddedUsers, List<User> ReactivatedUsers, string? Error)> JoinCampaignBatch(
+        int campaignId,
+        IReadOnlyCollection<long> userIds,
+        bool reactivateInactiveUsers = false)
+    {
+        if (userIds.Count == 0)
+            return ([], [], null);
+
+        var campaign = await db.Campaigns
+            .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+
+        if (campaign is null)
+            return ([], [], "⚠️ Кампания не найдена или более не активна.");
+
+        var users = await db.Users
+            .Where(u => userIds.Contains(u.Id))
+            .ToListAsync();
+
+        var existingMemberIds = await db.CampaignMembers
+            .Where(cm => cm.CampaignId == campaignId && userIds.Contains(cm.UserId))
+            .Select(cm => cm.UserId)
+            .ToListAsync();
+
+        var usersToAdd = users
+            .Where(u => !existingMemberIds.Contains(u.Id))
+            .ToList();
+
+        var reactivatedUsers = new List<User>();
+        if (reactivateInactiveUsers)
+        {
+            reactivatedUsers = usersToAdd
+                .Where(u => !u.IsActive)
+                .ToList();
+
+            foreach (var user in reactivatedUsers)
+                user.IsActive = true;
+        }
+
+        if (usersToAdd.Count == 0)
+            return ([], reactivatedUsers, null);
+
+        var joinedAt = DateTime.UtcNow;
+        var members = usersToAdd
+            .Select(u => new CampaignMember
+            {
+                CampaignId = campaignId,
+                UserId = u.Id,
+                JoinedAt = joinedAt
+            });
+
+        await db.CampaignMembers.AddRangeAsync(members);
+        await db.SaveChangesAsync();
+
+        logger.LogInformation(
+            "Added {UserCount} users to campaign {CampaignId}; reactivated {ReactivatedCount}",
+            usersToAdd.Count,
+            campaignId,
+            reactivatedUsers.Count);
+
+        return (usersToAdd, reactivatedUsers, null);
+    }
+
+    /// <summary>
     /// Removes a user from a campaign.
     /// </summary>
     public async Task<string?> LeaveCampaign(int campaignId, long userId)
@@ -275,6 +342,20 @@ public class CampaignManager(AppDbContext db, ILogger<CampaignManager> logger)
         return await db.Campaigns
             .Include(c => c.ForumThread)
             .Include(c => c.Members)
+            .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+    }
+
+    /// <summary>
+    /// Gets an active campaign with DM and member user details for display.
+    /// </summary>
+    public async Task<Campaign?> GetCampaignDetails(int campaignId)
+    {
+        return await db.Campaigns
+            .AsNoTracking()
+            .Include(c => c.ForumThread)
+            .Include(c => c.DungeonMaster)
+            .Include(c => c.Members)
+            .ThenInclude(m => m.User)
             .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
     }
 }

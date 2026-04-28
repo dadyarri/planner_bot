@@ -27,6 +27,7 @@ public partial class UpdateHandler(
     CommandHandler commandHandler,
     SlotCalculator slotCalculator,
     ForumThreadTracker forumThreadTracker,
+    AuthorizationService authorizationService,
     CampaignManager campaignManager,
     CampaignOrderService campaignOrderService,
     CampaignJoinDraftService campaignJoinDraftService,
@@ -313,7 +314,7 @@ public partial class UpdateHandler(
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
                     if (user is null) return;
 
-                    if (!IsSuperAdmin(user))
+                    if (!authorizationService.IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "🚨 Лишь старший Архимаг владеет этим призывом!");
@@ -324,6 +325,11 @@ public partial class UpdateHandler(
                         user.Id,
                         callbackQuery.Message!.Chat.Id,
                         campaignId);
+                    LogSuperAdminPickedCampaignJoinTarget(
+                        logger,
+                        user.Id,
+                        campaignId,
+                        callbackQuery.Message.Chat.Id);
 
                     await commandHandler.RenderCampaignJoinAdminPicker(
                         callbackQuery.Message.Chat.Id,
@@ -338,8 +344,9 @@ public partial class UpdateHandler(
                     var targetUserId = long.Parse(split[1]);
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
                     if (user is null) return;
+                    var page = split.Length > 3 ? int.Parse(split[3]) : 0;
 
-                    if (!IsSuperAdmin(user))
+                    if (!authorizationService.IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "🚨 Лишь старший Архимаг владеет этим призывом!");
@@ -350,6 +357,7 @@ public partial class UpdateHandler(
                     var draft = await campaignJoinDraftService.GetDraft(user.Id, chatId);
                     if (draft is null)
                     {
+                        LogMissingCampaignJoinDraft(logger, user.Id, chatId);
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Чернила на свитке высохли. Начни обряд заново.");
                         break;
@@ -358,6 +366,7 @@ public partial class UpdateHandler(
                     var campaign = await campaignManager.GetActiveCampaign(draft.CampaignId);
                     if (campaign is null)
                     {
+                        LogCampaignJoinDraftTargetMissing(logger, user.Id, draft.CampaignId, chatId);
                         await bot.EditMessageText(chatId, callbackQuery.Message.Id,
                             "⚠️ Кампания не найдена или более не активна.",
                             parseMode: ParseMode.Html);
@@ -371,21 +380,29 @@ public partial class UpdateHandler(
                         break;
                     }
 
+                    LogSuperAdminToggledCampaignJoinUser(
+                        logger,
+                        user.Id,
+                        targetUserId,
+                        campaign.Id,
+                        chatId);
                     await campaignJoinDraftService.ToggleSelectedUser(user.Id, chatId, targetUserId);
                     await commandHandler.RenderCampaignJoinAdminPicker(
                         chatId,
                         callbackQuery.Message.MessageThreadId,
                         campaign.Id,
                         user.Id,
-                        callbackQuery.Message.Id);
+                        callbackQuery.Message.Id,
+                        page);
                     break;
                 }
-            case CallbackActions.CampaignJoinSave:
+            case CallbackActions.CampaignJoinPage:
                 {
-                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    var page = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
                     if (user is null) return;
 
-                    if (!IsSuperAdmin(user))
+                    if (!authorizationService.IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "🚨 Лишь старший Архимаг владеет этим призывом!");
@@ -396,6 +413,38 @@ public partial class UpdateHandler(
                     var draft = await campaignJoinDraftService.GetDraft(user.Id, chatId);
                     if (draft is null)
                     {
+                        LogMissingCampaignJoinDraft(logger, user.Id, chatId);
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Чернила на свитке высохли. Начни обряд заново.");
+                        break;
+                    }
+
+                    await commandHandler.RenderCampaignJoinAdminPicker(
+                        chatId,
+                        callbackQuery.Message.MessageThreadId,
+                        draft.CampaignId,
+                        user.Id,
+                        callbackQuery.Message.Id,
+                        page);
+                    break;
+                }
+            case CallbackActions.CampaignJoinSave:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    if (!authorizationService.IsSuperAdmin(user))
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Лишь старший Архимаг владеет этим призывом!");
+                        break;
+                    }
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    var draft = await campaignJoinDraftService.GetDraft(user.Id, chatId);
+                    if (draft is null)
+                    {
+                        LogMissingCampaignJoinDraft(logger, user.Id, chatId);
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Чернила на свитке высохли. Начни обряд заново.");
                         break;
@@ -405,6 +454,7 @@ public partial class UpdateHandler(
                     if (campaign is null)
                     {
                         await campaignJoinDraftService.DeleteDraft(user.Id, chatId);
+                        LogCampaignJoinDraftTargetMissing(logger, user.Id, draft.CampaignId, chatId);
                         await bot.EditMessageText(chatId, callbackQuery.Message.Id,
                             "⚠️ Кампания не найдена или более не активна.",
                             parseMode: ParseMode.Html);
@@ -422,31 +472,35 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    var addedNames = new List<string>();
-                    foreach (var selectedUserId in selectedUserIds)
+                    var (addedUsers, reactivatedUsers, batchError) = await campaignManager.JoinCampaignBatch(
+                        campaign.Id,
+                        selectedUserIds,
+                        reactivateInactiveUsers: true);
+                    if (batchError is not null)
                     {
-                        var selectedUser = await db.Users.FindAsync(selectedUserId);
-                        if (selectedUser is null)
-                            continue;
-
-                        if (!selectedUser.IsActive)
-                        {
-                            selectedUser.IsActive = true;
-                            await db.SaveChangesAsync();
-                        }
-
-                        var joinError = await campaignManager.JoinCampaign(campaign.Id, selectedUserId);
-                        if (joinError is null)
-                            addedNames.Add(selectedUser.Name);
+                        await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                            batchError,
+                            parseMode: ParseMode.Html);
+                        break;
                     }
 
                     await campaignJoinDraftService.DeleteDraft(user.Id, chatId);
+                    LogSuperAdminSavedCampaignJoinDraft(
+                        logger,
+                        user.Id,
+                        campaign.Id,
+                        chatId,
+                        addedUsers.Count,
+                        reactivatedUsers.Count);
 
-                    var names = addedNames.Count == 0
+                    var names = addedUsers.Count == 0
                         ? "Никто не был призван."
-                        : string.Join(", ", addedNames);
+                        : string.Join(", ", addedUsers.Select(u => u.Name));
+                    var reactivatedText = reactivatedUsers.Count == 0
+                        ? string.Empty
+                        : $"\n\n🕯️ Из отшельничества возвращены: {string.Join(", ", reactivatedUsers.Select(u => u.Name))}";
                     await bot.EditMessageText(chatId, callbackQuery.Message.Id,
-                        $"✅ В кампанию <b>{campaign.ForumThread.Name}</b> призваны: {names}",
+                        $"✅ В кампанию <b>{campaign.ForumThread.Name}</b> призваны: {names}{reactivatedText}",
                         parseMode: ParseMode.Html);
                     break;
                 }
@@ -485,7 +539,7 @@ public partial class UpdateHandler(
 
                     // Re-verify the user is still the turn-holder DM
                     var currentCampaign = await campaignOrderService.GetCurrentCampaign(chatId);
-                    if (currentCampaign is null || (currentCampaign.DungeonMasterId != user.Id && !IsSuperAdmin(user)))
+                    if (currentCampaign is null || !authorizationService.CanManageCampaign(currentCampaign, user))
                     {
                         await bot.EditMessageText(
                             chatId,
@@ -541,7 +595,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+                    if (!authorizationService.CanManageCampaign(campaign, user))
                     {
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
@@ -586,7 +640,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+                    if (!authorizationService.CanManageCampaign(campaign, user))
                     {
                         await bot.EditMessageText(
                             callbackQuery.Message!.Chat.Id,
@@ -661,7 +715,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+                    if (!authorizationService.CanManageCampaign(campaign, user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер может начать голосование!");
@@ -719,7 +773,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (game.Campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+                    if (!authorizationService.CanManageCampaign(game.Campaign, user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер может удалить запись о битве!");
@@ -760,7 +814,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+                    if (!authorizationService.CanManageCampaign(campaign, user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер Подземелий может начать голосование!");
@@ -819,6 +873,19 @@ public partial class UpdateHandler(
                         campaignId);
                     break;
                 }
+            case CallbackActions.CampaignMembersPick:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    await bot.DeleteMessage(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id);
+                    await commandHandler.SendCampaignMembers(
+                        callbackQuery.Message.Chat.Id,
+                        callbackQuery.Message.MessageThreadId,
+                        campaignId);
+                    break;
+                }
             case CallbackActions.UnsaveCampaignPick:
                 {
                     // DM picked a campaign from service-thread /unsave → show unsave keyboard
@@ -839,7 +906,7 @@ public partial class UpdateHandler(
                         break;
                     }
 
-                    if (campaign.DungeonMasterId != user.Id && !IsSuperAdmin(user))
+                    if (!authorizationService.CanManageCampaign(campaign, user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "⚠️ Только Мастер Подземелий может стереть запись о битве!");
@@ -1033,7 +1100,7 @@ public partial class UpdateHandler(
                     var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, callbackOwnerId);
                     if (user is null) return;
 
-                    if (!IsSuperAdmin(user))
+                    if (!authorizationService.IsSuperAdmin(user))
                     {
                         await bot.AnswerCallbackQuery(callbackQuery.Id,
                             "🚨 Только старший Архимаг может назначать Мастеров!");
@@ -1051,6 +1118,12 @@ public partial class UpdateHandler(
                         break;
                     }
 
+                    LogSuperAdminAssignedCampaignDm(
+                        logger,
+                        user.Id,
+                        targetUserId,
+                        chatId,
+                        threadId.Value);
                     var (campaign, error) = await campaignManager.CreateCampaign(chatId, threadId.Value, targetUserId);
 
                     if (error is not null)
@@ -1229,12 +1302,6 @@ public partial class UpdateHandler(
     }
 
     /// <summary>
-    /// Returns true if the user is the designated super-admin who may act on behalf of any DM.
-    /// </summary>
-    private static bool IsSuperAdmin(User user) =>
-        string.Equals(user.Username, BotConstants.SuperAdminUsername, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
     /// Validates callback ownership by looking up the user by DB ID and comparing
     /// their username to the callback sender. Returns null if validation fails.
     /// </summary>
@@ -1245,6 +1312,7 @@ public partial class UpdateHandler(
 
         if (user is null)
         {
+            LogCallbackOwnerMissing(logger, userId, callbackQuery.From.Username);
             await bot.AnswerCallbackQuery(callbackQuery.Id,
                 "⚠️ Сначала зарегистрируйся командой /unpause");
             return null;
@@ -1252,6 +1320,7 @@ public partial class UpdateHandler(
 
         if (user.Username != callbackQuery.From.Username)
         {
+            LogCallbackOwnerMismatch(logger, user.Id, user.Username, callbackQuery.From.Username);
             await bot.AnswerCallbackQuery(callbackQuery.Id,
                 "🚨 Эта кнопка защищена древним проклятием!");
             return null;

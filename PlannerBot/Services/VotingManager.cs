@@ -22,8 +22,8 @@ public class VotingManager(
     ITimeTickerManager<TimeTickerEntity> ticker,
     TimeZoneUtilities timeZoneUtilities)
 {
-    private static readonly TimeSpan VoteSessionTtl = TimeSpan.FromHours(24);
-    private static readonly TimeSpan VoteReminderDelay = TimeSpan.FromHours(12);
+    private static readonly TimeSpan VoteSessionTtl = TimeSpan.FromHours(48);
+    private static readonly TimeOnly VoteReminderMorningTime = new(8, 0);
 
     /// <summary>
     /// Creates a voting session for a specific game datetime.
@@ -64,8 +64,8 @@ public class VotingManager(
             })
         });
 
-        // Schedule non-voter reminder
-        var reminderTime = DateTime.UtcNow.Add(VoteReminderDelay);
+        // Schedule non-voter reminder for the next 08:00 Moscow time to avoid night mentions.
+        var reminderTime = GetNextVoteReminderTimeUtc();
         if (reminderTime < expiresAt)
         {
             await ticker.AddAsync(new TimeTickerEntity
@@ -82,6 +82,17 @@ public class VotingManager(
         }
 
         return voteSession;
+    }
+
+    private DateTime GetNextVoteReminderTimeUtc()
+    {
+        var moscowNow = timeZoneUtilities.GetMoscowDateTime();
+        var nextMorningDate = moscowNow.TimeOfDay < VoteReminderMorningTime.ToTimeSpan()
+            ? moscowNow.Date
+            : moscowNow.Date.AddDays(1);
+        var nextMorningMoscow = nextMorningDate.Add(VoteReminderMorningTime.ToTimeSpan());
+
+        return timeZoneUtilities.ConvertToUtc(nextMorningMoscow);
     }
 
     /// <summary>

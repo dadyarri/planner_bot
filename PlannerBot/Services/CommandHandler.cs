@@ -1030,10 +1030,7 @@ public class CommandHandler(
 
         static string FormatUser(User user)
         {
-            var label = string.IsNullOrWhiteSpace(user.Username)
-                ? user.Name
-                : $"@{user.Username}";
-            return user.IsActive ? label : $"{label} (в отшельничестве)";
+            return user.IsActive ? user.Name : $"{user.Name} (в отшельничестве)";
         }
 
         var sb = new StringBuilder();

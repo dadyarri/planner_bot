@@ -107,6 +107,20 @@ public class VotingManager(
         });
         await db.SaveChangesAsync();
 
+        // Atomically increment the appropriate aggregate counter in the database.
+        if (voteType == VoteType.For)
+        {
+            await db.VoteSessions
+                .Where(vs => vs.Id == votingSessionId)
+                .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.VoteCount, vs => vs.VoteCount + 1));
+        }
+        else
+        {
+            await db.VoteSessions
+                .Where(vs => vs.Id == votingSessionId)
+                .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.AgainstCount, vs => vs.AgainstCount + 1));
+        }
+
         return await EvaluateVoteOutcome(votingSessionId);
     }
 
@@ -182,6 +196,7 @@ public class VotingManager(
     public async Task<VoteSession?> GetVotingSession(long votingSessionId)
     {
         return await db.VoteSessions
+            .AsNoTracking()
             .Include(vs => vs.Votes)
             .ThenInclude(v => v.User)
             .FirstOrDefaultAsync(vm => vm.Id == votingSessionId);
@@ -211,25 +226,30 @@ public class VotingManager(
     /// </summary>
     public async Task<string> BuildVotingMessageText(VoteSession session)
     {
-        var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(session.GameDateTime);
+        var refreshedSession = await db.VoteSessions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(vs => vs.Id == session.Id);
+        refreshedSession ??= session;
+
+        var moscowGameDateTime = timeZoneUtilities.ConvertToMoscow(refreshedSession.GameDateTime);
         var activeUsers = await db.CampaignMembers
             .Include(cm => cm.User)
-            .Where(cm => cm.CampaignId == session.CampaignId && cm.User.IsActive)
+            .Where(cm => cm.CampaignId == refreshedSession.CampaignId && cm.User.IsActive)
             .ToListAsync();
-        var (forVoters, againstVoters) = await GetVoterInfo(session.Id);
+        var (forVoters, againstVoters) = await GetVoterInfo(refreshedSession.Id);
 
         var sb = new StringBuilder();
         sb.AppendLine(
             $"⚔️ Совет братства решает! {timeZoneUtilities.FormatDate(moscowGameDateTime)} — час кампании: <b>{timeZoneUtilities.FormatTime(moscowGameDateTime)}</b>");
         sb.AppendLine();
-        sb.AppendLine($"👍 За: {forVoters.Count}/{activeUsers.Count}");
+        sb.AppendLine($"👍 За: {refreshedSession.VoteCount}/{activeUsers.Count}");
 
         if (forVoters.Count > 0)
             sb.AppendLine($"  └ {string.Join(", ", forVoters)}");
 
-        if (session.AgainstCount > 0 || againstVoters.Count > 0)
+        if (refreshedSession.AgainstCount > 0 || againstVoters.Count > 0)
         {
-            sb.AppendLine($"👎 Против: {againstVoters.Count}");
+            sb.AppendLine($"👎 Против: {refreshedSession.AgainstCount}");
             if (againstVoters.Count > 0)
                 sb.AppendLine($"  └ {string.Join(", ", againstVoters)}");
         }

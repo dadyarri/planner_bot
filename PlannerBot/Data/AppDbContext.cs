@@ -19,6 +19,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AvailableSlot> AvailableSlots { get; set; }
     public DbSet<CampaignOrderState> CampaignOrderStates { get; set; }
     public DbSet<CampaignOrderDraft> CampaignOrderDrafts { get; set; }
+    public DbSet<CampaignJoinDraft> CampaignJoinDrafts { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -48,6 +49,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .IsUnique();
 
         modelBuilder.Entity<CampaignOrderDraft>()
+            .HasIndex(d => new { d.UserId, d.ChatId })
+            .IsUnique();
+
+        modelBuilder.Entity<CampaignJoinDraft>()
             .HasIndex(d => new { d.UserId, d.ChatId })
             .IsUnique();
 

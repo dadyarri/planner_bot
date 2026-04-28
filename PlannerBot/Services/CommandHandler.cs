@@ -28,6 +28,7 @@ public class CommandHandler(
     TimeZoneUtilities timeZoneUtilities,
     CampaignManager campaignManager,
     CampaignOrderService campaignOrderService,
+    CampaignJoinDraftService campaignJoinDraftService,
     ITimeTickerManager<TimeTickerEntity> ticker,
     ICronTickerManager<CronTickerEntity> cronTicker,
     ILogger<UpdateHandler> logger)
@@ -774,6 +775,41 @@ public class CommandHandler(
     {
         var user = await EnsureUser(msg);
 
+        if (IsSuperAdmin(user))
+        {
+            var campaign = await campaignManager.ResolveCampaignFromContext(
+                msg.Chat.Id, msg.MessageThreadId);
+
+            if (campaign is not null)
+            {
+                await campaignJoinDraftService.InitializeDraft(user.Id, msg.Chat.Id, campaign.Id);
+                await RenderCampaignJoinAdminPicker(
+                    msg.Chat.Id,
+                    msg.MessageThreadId,
+                    campaign.Id,
+                    user.Id);
+                return;
+            }
+
+            var allCampaigns = await campaignManager.GetActiveCampaigns(msg.Chat.Id);
+            if (allCampaigns.Count == 0)
+            {
+                await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                    text: "⚠️ В этом чате нет активных кампаний.",
+                    parseMode: ParseMode.Html);
+                return;
+            }
+
+            var campaignPickerKeyboard = keyboardGenerator.GenerateCampaignPickerKeyboard(
+                CallbackActions.CampaignJoinPick, allCampaigns, user.Id);
+
+            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
+                text: "🧙 Выбери кампанию, в которую желаешь призвать героев:",
+                parseMode: ParseMode.Html,
+                replyMarkup: new InlineKeyboardMarkup(campaignPickerKeyboard));
+            return;
+        }
+
         // If in a campaign thread, join that campaign directly
         if (msg.MessageThreadId is not null)
         {
@@ -812,6 +848,79 @@ public class CommandHandler(
 
         await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
             text: "⚔️ Выбери кампанию, в которую хочешь вступить:",
+            parseMode: ParseMode.Html,
+            replyMarkup: new InlineKeyboardMarkup(keyboard));
+    }
+
+    /// <summary>
+    /// Renders the super-admin multi-select picker for adding users to a campaign.
+    /// Sends a new message when <paramref name="messageId"/> is null; otherwise edits the existing one.
+    /// </summary>
+    internal async Task RenderCampaignJoinAdminPicker(
+        long chatId,
+        int? threadId,
+        int campaignId,
+        long callbackOwnerId,
+        int? messageId = null)
+    {
+        var campaign = await campaignManager.GetActiveCampaign(campaignId);
+        if (campaign is null)
+        {
+            if (messageId.HasValue)
+            {
+                await bot.EditMessageText(chatId, messageId.Value,
+                    "⚠️ Кампания не найдена или более не активна.",
+                    parseMode: ParseMode.Html);
+            }
+            else
+            {
+                await bot.SendMessage(chatId, messageThreadId: threadId,
+                    text: "⚠️ Кампания не найдена или более не активна.",
+                    parseMode: ParseMode.Html);
+            }
+
+            return;
+        }
+
+        var users = await db.Users
+            .OrderByDescending(u => u.IsActive)
+            .ThenBy(u => u.Name)
+            .ToListAsync();
+
+        var existingMemberIds = campaign.Members
+            .Select(m => m.UserId)
+            .ToHashSet();
+        var selectedUserIds = (await campaignJoinDraftService.GetSelectedUserIds(callbackOwnerId, chatId))
+            .ToHashSet();
+
+        var keyboard = keyboardGenerator.GenerateCampaignJoinPickerKeyboard(
+            users,
+            existingMemberIds,
+            selectedUserIds,
+            callbackOwnerId);
+
+        var selectedCount = selectedUserIds.Count;
+        var text = $"""
+                    🧙 Выбери героев для кампании <b>{campaign.ForumThread.Name}</b>.
+
+                    ✅ Уже в кампании
+                    ☑️ Будут добавлены
+                    ⬜ Ещё не выбраны
+
+                    Отмечено к призыву: <b>{selectedCount}</b>
+                    """;
+
+        if (messageId.HasValue)
+        {
+            await bot.EditMessageText(chatId, messageId.Value,
+                text,
+                parseMode: ParseMode.Html,
+                replyMarkup: new InlineKeyboardMarkup(keyboard));
+            return;
+        }
+
+        await bot.SendMessage(chatId, messageThreadId: threadId,
+            text: text,
             parseMode: ParseMode.Html,
             replyMarkup: new InlineKeyboardMarkup(keyboard));
     }

@@ -266,4 +266,15 @@ public class CampaignManager(AppDbContext db, ILogger<CampaignManager> logger)
             .Where(c => c.IsActive && c.ForumThread.ChatId == chatId)
             .ToListAsync();
     }
+
+    /// <summary>
+    /// Gets an active campaign by ID, including its forum thread and current members.
+    /// </summary>
+    public async Task<Campaign?> GetActiveCampaign(int campaignId)
+    {
+        return await db.Campaigns
+            .Include(c => c.ForumThread)
+            .Include(c => c.Members)
+            .FirstOrDefaultAsync(c => c.Id == campaignId && c.IsActive);
+    }
 }

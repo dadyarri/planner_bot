@@ -278,6 +278,50 @@ public class KeyboardGenerator(AppDbContext db, TimeZoneUtilities timeZoneUtilit
     }
 
     /// <summary>
+    /// Generates a multi-select user picker keyboard for the super-admin /campaign_join flow.
+    /// Existing campaign members are marked with a check and are not intended to be toggled.
+    /// Newly selected users are marked separately until saved.
+    /// </summary>
+    public InlineKeyboardButton[][] GenerateCampaignJoinPickerKeyboard(
+        IReadOnlyList<User> users,
+        IReadOnlySet<long> existingMemberIds,
+        IReadOnlySet<long> selectedUserIds,
+        long callbackOwnerId)
+    {
+        var buttons = users
+            .Select(u =>
+            {
+                var prefix = existingMemberIds.Contains(u.Id)
+                    ? "✅ "
+                    : selectedUserIds.Contains(u.Id)
+                        ? "☑️ "
+                        : "⬜ ";
+                var label = string.IsNullOrWhiteSpace(u.Username)
+                    ? u.Name
+                    : $"@{u.Username}";
+                return new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        $"{prefix}{label}",
+                        $"{CallbackActions.CampaignJoinToggle};{u.Id};{callbackOwnerId}")
+                };
+            })
+            .ToList();
+
+        buttons.Add(
+        [
+            InlineKeyboardButton.WithCallbackData(
+                "❌ Отмена",
+                $"{CallbackActions.CampaignJoinCancel};{callbackOwnerId}"),
+            InlineKeyboardButton.WithCallbackData(
+                "💾 Добавить",
+                $"{CallbackActions.CampaignJoinSave};{callbackOwnerId}")
+        ]);
+
+        return buttons.ToArray();
+    }
+
+    /// <summary>
     /// Generates a keyboard listing future saved games for /unsave (DM-only inline picker).
     /// Each button shows the game date/time and embeds saved game ID and user ID.
     /// Includes a cancel button at the bottom.

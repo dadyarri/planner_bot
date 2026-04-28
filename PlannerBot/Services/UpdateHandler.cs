@@ -29,6 +29,7 @@ public partial class UpdateHandler(
     ForumThreadTracker forumThreadTracker,
     CampaignManager campaignManager,
     CampaignOrderService campaignOrderService,
+    CampaignJoinDraftService campaignJoinDraftService,
     AppDbContext db) : IUpdateHandler
 {
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update,
@@ -304,6 +305,158 @@ public partial class UpdateHandler(
                         joinResultText,
                         parseMode: ParseMode.Html);
 
+                    break;
+                }
+            case CallbackActions.CampaignJoinPick:
+                {
+                    var campaignId = int.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    if (!IsSuperAdmin(user))
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Лишь старший Архимаг владеет этим призывом!");
+                        break;
+                    }
+
+                    await campaignJoinDraftService.InitializeDraft(
+                        user.Id,
+                        callbackQuery.Message!.Chat.Id,
+                        campaignId);
+
+                    await commandHandler.RenderCampaignJoinAdminPicker(
+                        callbackQuery.Message.Chat.Id,
+                        callbackQuery.Message.MessageThreadId,
+                        campaignId,
+                        user.Id,
+                        callbackQuery.Message.Id);
+                    break;
+                }
+            case CallbackActions.CampaignJoinToggle:
+                {
+                    var targetUserId = long.Parse(split[1]);
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[2]));
+                    if (user is null) return;
+
+                    if (!IsSuperAdmin(user))
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Лишь старший Архимаг владеет этим призывом!");
+                        break;
+                    }
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    var draft = await campaignJoinDraftService.GetDraft(user.Id, chatId);
+                    if (draft is null)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Чернила на свитке высохли. Начни обряд заново.");
+                        break;
+                    }
+
+                    var campaign = await campaignManager.GetActiveCampaign(draft.CampaignId);
+                    if (campaign is null)
+                    {
+                        await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    if (campaign.Members.Any(m => m.UserId == targetUserId))
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "✅ Этот герой уже состоит в кампании.");
+                        break;
+                    }
+
+                    await campaignJoinDraftService.ToggleSelectedUser(user.Id, chatId, targetUserId);
+                    await commandHandler.RenderCampaignJoinAdminPicker(
+                        chatId,
+                        callbackQuery.Message.MessageThreadId,
+                        campaign.Id,
+                        user.Id,
+                        callbackQuery.Message.Id);
+                    break;
+                }
+            case CallbackActions.CampaignJoinSave:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    if (!IsSuperAdmin(user))
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "🚨 Лишь старший Архимаг владеет этим призывом!");
+                        break;
+                    }
+
+                    var chatId = callbackQuery.Message!.Chat.Id;
+                    var draft = await campaignJoinDraftService.GetDraft(user.Id, chatId);
+                    if (draft is null)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Чернила на свитке высохли. Начни обряд заново.");
+                        break;
+                    }
+
+                    var campaign = await campaignManager.GetActiveCampaign(draft.CampaignId);
+                    if (campaign is null)
+                    {
+                        await campaignJoinDraftService.DeleteDraft(user.Id, chatId);
+                        await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                            "⚠️ Кампания не найдена или более не активна.",
+                            parseMode: ParseMode.Html);
+                        break;
+                    }
+
+                    var selectedUserIds = (await campaignJoinDraftService.GetSelectedUserIds(user.Id, chatId))
+                        .Except(campaign.Members.Select(m => m.UserId))
+                        .ToList();
+
+                    if (selectedUserIds.Count == 0)
+                    {
+                        await bot.AnswerCallbackQuery(callbackQuery.Id,
+                            "⚠️ Сначала отметь героев для призыва.");
+                        break;
+                    }
+
+                    var addedNames = new List<string>();
+                    foreach (var selectedUserId in selectedUserIds)
+                    {
+                        var selectedUser = await db.Users.FindAsync(selectedUserId);
+                        if (selectedUser is null)
+                            continue;
+
+                        if (!selectedUser.IsActive)
+                        {
+                            selectedUser.IsActive = true;
+                            await db.SaveChangesAsync();
+                        }
+
+                        var joinError = await campaignManager.JoinCampaign(campaign.Id, selectedUserId);
+                        if (joinError is null)
+                            addedNames.Add(selectedUser.Name);
+                    }
+
+                    await campaignJoinDraftService.DeleteDraft(user.Id, chatId);
+
+                    var names = addedNames.Count == 0
+                        ? "Никто не был призван."
+                        : string.Join(", ", addedNames);
+                    await bot.EditMessageText(chatId, callbackQuery.Message.Id,
+                        $"✅ В кампанию <b>{campaign.ForumThread.Name}</b> призваны: {names}",
+                        parseMode: ParseMode.Html);
+                    break;
+                }
+            case CallbackActions.CampaignJoinCancel:
+                {
+                    var user = await ValidateCallbackOwnerAndResolveUser(callbackQuery, long.Parse(split[1]));
+                    if (user is null) return;
+
+                    await campaignJoinDraftService.DeleteDraft(user.Id, callbackQuery.Message!.Chat.Id);
+                    await bot.DeleteMessage(callbackQuery.Message.Chat.Id, callbackQuery.Message.Id);
                     break;
                 }
             case CallbackActions.CampaignLeave:

@@ -36,6 +36,7 @@ builder.Services.AddScoped<CommandHandler>();
 builder.Services.AddScoped<ForumThreadTracker>();
 builder.Services.AddScoped<CampaignManager>();
 builder.Services.AddScoped<CampaignOrderService>();
+builder.Services.AddScoped<CampaignJoinDraftService>();
 builder.Services.AddScoped<Jobs>();
 builder.Services.AddHostedService<PollingService>();
 builder.Services.AddNpgsql<AppDbContext>(databaseUrl);

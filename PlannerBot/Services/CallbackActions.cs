@@ -31,6 +31,18 @@ public static class CallbackActions
     /// <summary>User selected a campaign from the campaign picker to join.</summary>
     public const string CampaignJoin = "cj";
 
+    /// <summary>Super-admin selected a campaign for the /campaign_join backdoor flow.</summary>
+    public const string CampaignJoinPick = "cjp";
+
+    /// <summary>Super-admin toggled a user in the /campaign_join multi-select draft.</summary>
+    public const string CampaignJoinToggle = "cjt";
+
+    /// <summary>Super-admin saved the /campaign_join multi-select draft.</summary>
+    public const string CampaignJoinSave = "cjs";
+
+    /// <summary>Super-admin cancelled the /campaign_join multi-select draft.</summary>
+    public const string CampaignJoinCancel = "cjc";
+
     /// <summary>User selected a campaign from the campaign picker to leave.</summary>
     public const string CampaignLeave = "cl";
 

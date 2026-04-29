@@ -108,8 +108,6 @@ This is no longer an early prototype. The project has real workflow coverage, bu
 - Super-admin `/campaign_join` result messages list users who were reactivated during the save.
 - Super-admin `/campaign_join` user picker is paginated to keep large rosters manageable.
 - Vote reminder scheduling now targets the next 08:00 Moscow time instead of a fixed 12-hour delay.
-- Voting now ignores reactions from users outside the target campaign membership.
-- Vote reminder messages now reply to the original voting post for tighter chat context.
 - Super-admin campaign joins are batched instead of saving once per selected user.
 - Structured logs were added for super-admin campaign join actions, stale drafts, DM assignment, and batch membership changes.
 - `/campaign_members` was added to inspect campaign DM and member roster from campaign or service threads.
@@ -118,7 +116,6 @@ This is no longer an early prototype. The project has real workflow coverage, bu
 - Protected callback ownership failures now emit warning logs for stale owners and mismatched users.
 - Super-admin and campaign-management checks now go through a shared authorization service.
 - Bulk update/delete usage was audited for stale tracked-entity reads; current risky vote paths already refresh with no-tracking queries.
-- Voting-specific callback and reaction handling was split into a dedicated `UpdateHandler` partial to start shrinking the main handler.
 
 ---
 
@@ -169,5 +166,5 @@ All current Observability items are implemented.
 
 ## Suggested Near-Term Plan
 
-1. Continue splitting non-voting callback flows into feature-specific `UpdateHandler` partials or dedicated services.
+1. Refactor callback handling into smaller feature-specific units before `UpdateHandler` grows further.
 2. Continue structural refactoring of handlers and authorization.

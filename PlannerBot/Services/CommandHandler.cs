@@ -684,25 +684,24 @@ public class CommandHandler(
     private async Task HandleWeeklyCommand(Message msg)
     {
         const string votingReminderFunctionName = "send_weekly_voting_reminder";
-        const string votingReminderCron = "0 0 21 * * 6"; // Every Saturday 9pm UTC
+        const string votingReminderCron = "0 0 15 * * 6"; // Every Saturday 6pm MSK (3pm UTC)
 
         var existingJobs = await db.Set<CronTickerEntity>()
             .Where(c => c.Function == votingReminderFunctionName)
             .ToListAsync();
 
-        var alreadyScheduledForThread = existingJobs
+        var existingJobIdsForChat = existingJobs
             .Select(c => TickerHelper.ReadTickerRequest<WeeklyVotingReminderJobContext>(c.Request))
-            .Any(request => request.ChatId == msg.Chat.Id && request.ThreadId == msg.MessageThreadId);
-
-        if (alreadyScheduledForThread)
-        {
-            await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "🔔 Глас уже вещает каждую седмицу!");
-            return;
-        }
+            .Zip(existingJobs, (request, job) => new { request.ChatId, job.Id })
+            .Where(x => x.ChatId == msg.Chat.Id)
+            .Select(x => x.Id)
+            .ToList();
 
         try
         {
+            if (existingJobIdsForChat.Count != 0)
+                await cronTicker.DeleteBatchAsync(existingJobIdsForChat);
+
             await cronTicker.AddAsync(new CronTickerEntity
             {
                 Function = votingReminderFunctionName,
@@ -715,7 +714,9 @@ public class CommandHandler(
             });
 
             await bot.SendMessage(msg.Chat, messageThreadId: msg.MessageThreadId,
-                text: "✅ Глас будет вещать каждый день Сатурна в час ужина!");
+                text: existingJobIdsForChat.Count == 0
+                    ? "✅ Глас будет вещать каждый день Сатурна в час ужина!"
+                    : "✅ Прежний глас смолк, и новый будет вещать каждый день Сатурна в час ужина!");
         }
         catch (Exception ex)
         {

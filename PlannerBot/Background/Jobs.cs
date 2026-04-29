@@ -105,14 +105,39 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
     {
         logger.LogInformation("Sending weekly voting reminder");
 
-        var activePlayers = await db.Users
-            .Where(u => u.IsActive)
-            .Select(u => u.Username)
+        var currentCampaign = await db.CampaignOrderStates
+            .AsNoTracking()
+            .Where(s => s.ChatId == context.Request.ChatId && s.CurrentCampaignId.HasValue)
+            .Select(s => s.CurrentCampaignId!.Value)
+            .Join(
+                db.Campaigns.AsNoTracking().Include(c => c.ForumThread),
+                currentCampaignId => currentCampaignId,
+                campaign => campaign.Id,
+                (_, campaign) => campaign)
+            .FirstOrDefaultAsync(
+                c => c.IsActive && c.OrderIndex.HasValue,
+                cancellationToken);
+
+        if (currentCampaign is null)
+        {
+            logger.LogWarning(
+                "Weekly voting reminder skipped: no current campaign found for chat {ChatId}",
+                context.Request.ChatId);
+            return;
+        }
+
+        var activePlayers = await db.CampaignMembers
+            .Include(cm  => cm.User)
+            .Where(cm => cm.CampaignId == currentCampaign.Id && cm.User.IsActive)
+            .Select(cm => cm.User.Username)
+            .Distinct()
             .ToListAsync(cancellationToken);
 
         if (activePlayers.Count == 0)
         {
-            logger.LogWarning("No active players found for weekly reminder");
+            logger.LogWarning(
+                "No active campaign members found for weekly reminder in campaign {CampaignId}",
+                currentCampaign.Id);
             return;
         }
 
@@ -129,7 +154,7 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
                        🍀 Пусть боги будут благосклонны к вам! 🍀
                        """;
 
-        await bot.SendMessage(context.Request.ChatId, messageThreadId: context.Request.ThreadId,
+        await bot.SendMessage(context.Request.ChatId, messageThreadId: currentCampaign.ForumThread.ThreadId,
             text: message, cancellationToken: cancellationToken);
     }
 

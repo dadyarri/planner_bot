@@ -119,6 +119,7 @@ This is no longer an early prototype. The project has real workflow coverage, bu
 - Super-admin and campaign-management checks now go through a shared authorization service.
 - Bulk update/delete usage was audited for stale tracked-entity reads; current risky vote paths already refresh with no-tracking queries.
 - Voting-specific callback and reaction handling was split into a dedicated `UpdateHandler` partial to start shrinking the main handler.
+- Super-admin `/campaign_join` draft callbacks were split into a dedicated `UpdateHandler` partial to continue reducing switch density.
 
 ---
 
@@ -169,5 +170,5 @@ All current Observability items are implemented.
 
 ## Suggested Near-Term Plan
 
-1. Continue splitting non-voting callback flows into feature-specific `UpdateHandler` partials or dedicated services.
+1. Continue splitting remaining campaign/order/saved-game callback flows into feature-specific `UpdateHandler` partials or dedicated services.
 2. Continue structural refactoring of handlers and authorization.

@@ -76,7 +76,8 @@ public class VotingManager(
                 {
                     VoteSessionId = voteSession.Id,
                     ChatId = message.Chat.Id,
-                    ThreadId = message.MessageThreadId
+                    ThreadId = message.MessageThreadId,
+                    MessageId = message.MessageId
                 })
             });
         }
@@ -162,6 +163,20 @@ public class VotingManager(
                 .Where(vs => vs.Id == votingSessionId && vs.AgainstCount > 0)
                 .ExecuteUpdateAsync(s => s.SetProperty(vs => vs.AgainstCount, vs => vs.AgainstCount - 1));
         }
+    }
+
+    public async Task<bool> CanUserVote(long votingSessionId, long userId)
+    {
+        var campaignId = await db.VoteSessions
+            .Where(vs => vs.Id == votingSessionId)
+            .Select(vs => (int?)vs.CampaignId)
+            .FirstOrDefaultAsync();
+
+        if (!campaignId.HasValue)
+            return false;
+
+        return await db.CampaignMembers
+            .AnyAsync(cm => cm.CampaignId == campaignId.Value && cm.UserId == userId && cm.User.IsActive);
     }
 
     /// <summary>

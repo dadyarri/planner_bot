@@ -1187,6 +1187,9 @@ public partial class UpdateHandler(
         if (user is null || !user.IsActive)
             return;
 
+        if (!await votingManager.CanUserVote(votingSession.Id, user.Id))
+            return;
+
         var outcome = VoteOutcome.Pending;
 
         // Process all removals first so duplicate-vote checks don't block additions

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using PlannerBot.Data;
 using PlannerBot.Services;
 using Telegram.Bot;
+using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using TickerQ.Utilities.Base;
 
@@ -217,6 +218,8 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
                        """;
 
         await bot.SendMessage(context.Request.ChatId, messageThreadId: context.Request.ThreadId,
-            text: message, cancellationToken: cancellationToken);
+            text: message,
+            replyParameters: new ReplyParameters { MessageId = context.Request.MessageId },
+            cancellationToken: cancellationToken);
     }
 }

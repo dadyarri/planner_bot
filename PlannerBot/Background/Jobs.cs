@@ -11,7 +11,6 @@ namespace PlannerBot.Background;
 
 public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db, TimeZoneUtilities timeZoneUtilities)
 {
-
     [TickerFunction("send_reminder")]
     public async Task SendReminder(TickerFunctionContext<SendReminderJobContext> context,
         CancellationToken cancellationToken)
@@ -20,12 +19,12 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
 
         var savedGame = await db.SavedGame
             .Include(sg => sg.Campaign)
-                .ThenInclude(c => c.ForumThread)
+            .ThenInclude(c => c.ForumThread)
             .Include(sg => sg.Campaign)
-                .ThenInclude(c => c.DungeonMaster)
+            .ThenInclude(c => c.DungeonMaster)
             .Include(sg => sg.Campaign)
-                .ThenInclude(c => c.Members)
-                    .ThenInclude(m => m.User)
+            .ThenInclude(c => c.Members)
+            .ThenInclude(m => m.User)
             .FirstOrDefaultAsync(sg => sg.Id == context.Request.SavedGameId, cancellationToken);
 
         if (savedGame is null)
@@ -34,48 +33,6 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
             return;
         }
 
-        var availablePlayers = await db.Responses
-            .Include(r => r.User)
-            .Where(r => r.DateTime.HasValue &&
-                        r.DateTime.Value.Date == savedGame.DateTime.Date &&
-                        (r.Availability == Availability.Yes || r.Availability == Availability.Probably) &&
-                        r.User.IsActive)
-            .Select(r => r.User.Username)
-            .ToListAsync(cancellationToken);
-
-        // Exclude users who voted against this time slot and inactive users
-        var excludedUsernames = new HashSet<string>();
-
-        var inactiveUsernames = await db.Users
-            .Where(u => !u.IsActive)
-            .Select(u => u.Username)
-            .ToListAsync(cancellationToken);
-        excludedUsernames.UnionWith(inactiveUsernames);
-
-        var voteSession = await db.VoteSessions
-            .Include(vs => vs.Votes)
-            .FirstOrDefaultAsync(vs => vs.GameDateTime == savedGame.DateTime, cancellationToken);
-
-        if (voteSession is not null)
-        {
-            var againstUserIds = voteSession.Votes
-                .Where(v => v.Type == VoteType.Against)
-                .Select(v => v.UserId)
-                .ToHashSet();
-
-            var againstUsernames = await db.Users
-                .Where(u => againstUserIds.Contains(u.Id))
-                .Select(u => u.Username)
-                .ToListAsync(cancellationToken);
-
-            excludedUsernames.UnionWith(againstUsernames);
-        }
-
-        availablePlayers = availablePlayers
-            .Where(u => !excludedUsernames.Contains(u))
-            .ToList();
-
-        var availablePlayerTags = availablePlayers.Select(u => $"@{u}").ToList();
         var interval = TimeSpan.FromMinutes(context.Request.ReminderIntervalMinutes);
 
         var campaign = savedGame.Campaign;
@@ -86,8 +43,6 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
             .Select(m => $"@{m.User.Username}");
 
         var message = $"""
-                       {string.Join(", ", availablePlayerTags)}
-
                        🚨 🚨 🚨 Герольды трубят — битва начнётся через {interval.Humanize(culture: timeZoneUtilities.GetRussianCultureInfo(), toWords: true)}! 🚨 🚨 🚨
 
                        <b>Кампания:</b> {campaignName}
@@ -127,7 +82,7 @@ public class Jobs(ILogger<Jobs> logger, ITelegramBotClient bot, AppDbContext db,
         }
 
         var activePlayers = await db.CampaignMembers
-            .Include(cm  => cm.User)
+            .Include(cm => cm.User)
             .Where(cm => cm.CampaignId == currentCampaign.Id && cm.User.IsActive)
             .Select(cm => cm.User.Username)
             .Distinct()
